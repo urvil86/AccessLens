@@ -43,7 +43,8 @@ function GTNSummaryTab() {
     rebates: -d.totalRebates,
     chargebacks: -d.totalChargebacks,
     feesOther: -d.totalOther,
-    netSales: d.netSales,
+    iraRebate: -d.iraRebate,
+    netSales: d.netSalesAfterIRA,
   }));
 
   const trendData = annualData.map(d => ({ year: d.year, gtnPct: d.gtnPct, netPrice: d.netPrice }));
@@ -67,6 +68,8 @@ function GTNSummaryTab() {
     ['Fees/Other ($M)', ...annualData.map(d => fmtM(d.totalOther))],
     ['Total Deductions', ...annualData.map(d => fmtM(d.totalDeductions))],
     ['Net Sales ($M)', ...annualData.map(d => fmtM(d.netSales))],
+    ['IRA Rebate ($M)', ...annualData.map(d => fmtM(d.iraRebate))],
+    ['Net After IRA ($M)', ...annualData.map(d => fmtM(d.netSalesAfterIRA))],
     ['GTN%', ...annualData.map(d => fmtPct(d.gtnPct))],
     ['Net $/Unit', ...annualData.map(d => fmtD(d.netPrice))],
     ['Net % of WAC', ...annualData.map(d => fmtPct(d.netPct))],
@@ -100,7 +103,8 @@ function GTNSummaryTab() {
             <Bar dataKey="rebates" name="Rebates" stackId="a" fill="#f87171" />
             <Bar dataKey="chargebacks" name="Chargebacks" stackId="a" fill="#C6B78A" />
             <Bar dataKey="feesOther" name="Fees/Other" stackId="a" fill="#C98B27" />
-            <Line type="monotone" dataKey="netSales" name="Net Sales" stroke="#4ade80" strokeWidth={2}
+            <Bar dataKey="iraRebate" name="IRA Inflation Rebate" stackId="a" fill="#9333ea" />
+            <Line type="monotone" dataKey="netSales" name="Net Sales (after IRA)" stroke="#4ade80" strokeWidth={2}
               dot={{ r: 5, fill: '#4ade80', strokeWidth: 0 }}
               label={{ position: 'top', fontSize: 10, formatter: (v: number) => fmtM(v) }} />
           </ComposedChart>
@@ -575,11 +579,137 @@ function BuyBillAnalysisTab() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TAB D — Payer / PBM Analysis (Pharmacy Benefit only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function PayerPBMTab() {
+  const { annualData, aspData, forecastYears } = useComputedData();
+  const forecast = useStore(s => s.forecast);
+  const rebates = useStore(s => s.rebates);
+  const rp = useStore(s => s.referenceProduct);
+
+  // PBM rebate trend
+  const rebateTrend = rebates.map(r => ({ year: r.year, 'PBM Rebate %': r.comPbm, 'Part D Rebate %': r.mcrD }));
+
+  // Effective net price at pharmacy: WAC minus all rebates and fees per unit
+  const netPriceData = annualData.map((d, i) => {
+    const netPerUnit = d.units > 0 ? d.netSalesAfterIRA / d.units : 0;
+    const rpWac = rp.wacPerUnit[i] ?? 0;
+    return {
+      year: d.year,
+      'Biosimilar Net $/Unit': netPerUnit,
+      'RP WAC $/Unit': rpWac,
+      'Biosimilar WAC': forecast[i]?.wacPerUnit ?? 0,
+    };
+  });
+
+  // Formulary position by year
+  const formularyByYear = rebates.map(r => {
+    const tier = r.comPbm > 25 ? 'Preferred' : r.comPbm >= 15 ? 'Non-Preferred' : 'Non-Formulary';
+    return { year: r.year, tier, rebate: r.comPbm };
+  });
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader>Formulary Position Analysis</SectionHeader>
+      <div className="flex gap-3 flex-wrap">
+        {formularyByYear.map(f => (
+          <div key={f.year} className={`rounded-lg px-4 py-3 text-center border ${f.tier === 'Preferred' ? 'border-green-300 bg-green-50' : f.tier === 'Non-Preferred' ? 'border-amber-300 bg-amber-50' : 'border-red-300 bg-red-50'}`}>
+            <div className="font-bold text-xs text-[#004567]">{f.year}</div>
+            <div className={`text-sm font-bold mt-1 ${f.tier === 'Preferred' ? 'text-green-700' : f.tier === 'Non-Preferred' ? 'text-amber-700' : 'text-red-700'}`}>{f.tier}</div>
+            <div className="text-[10px] font-mono text-[#9296B2] mt-0.5">{f.rebate.toFixed(1)}% rebate</div>
+          </div>
+        ))}
+      </div>
+
+      <SectionHeader>PBM Rebate Trend</SectionHeader>
+      <div className="bg-white rounded-xl border border-[#EAECEC] p-4">
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={rebateTrend}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
+            <XAxis dataKey="year" tick={{ fontSize: 12 }} />
+            <YAxis tickFormatter={(v: number) => `${v}%`} tick={{ fontSize: 11 }} />
+            <Tooltip contentStyle={{ fontSize: 12 }} formatter={(v: number) => [`${Number(v).toFixed(1)}%`]} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line dataKey="PBM Rebate %" stroke="#5B9BD5" strokeWidth={2.5} dot={{ r: 4 }} />
+            <Line dataKey="Part D Rebate %" stroke="#C98B27" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <SectionHeader>Effective Net Price: Biosimilar vs Reference Product</SectionHeader>
+      <div className="bg-white rounded-xl border border-[#EAECEC] p-4">
+        <ResponsiveContainer width="100%" height={320}>
+          <LineChart data={netPriceData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
+            <XAxis dataKey="year" tick={{ fontSize: 12 }} />
+            <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}`} tick={{ fontSize: 11 }} />
+            <Tooltip contentStyle={{ fontSize: 12 }} formatter={(v: number) => [fmtD(v)]} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line dataKey="RP WAC $/Unit" stroke="#f87171" strokeWidth={2} strokeDasharray="8 4" dot={{ r: 4 }} />
+            <Line dataKey="Biosimilar WAC" stroke="#9296B2" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} />
+            <Line dataKey="Biosimilar Net $/Unit" stroke="#4ade80" strokeWidth={2.5} dot={{ r: 5 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <SectionHeader>Payer Value Proposition</SectionHeader>
+      <div className="overflow-auto rounded-lg border border-[#EAECEC]">
+        <table className="w-full text-xs">
+          <thead><tr className="bg-[#004567] text-white">
+            <th className="px-3 py-2 text-left">Metric</th>
+            {forecastYears.map(y => <th key={y} className="px-3 py-2 text-center">{y}</th>)}
+          </tr></thead>
+          <tbody>
+            <tr className="bg-white">
+              <td className="px-3 py-1.5 font-semibold text-[#004567]">Biosimilar WAC</td>
+              {forecast.map((f, i) => <td key={i} className="px-3 py-1.5 text-center font-mono">{fmtD(f.wacPerUnit)}</td>)}
+            </tr>
+            <tr className="bg-[#EAECEC]/40">
+              <td className="px-3 py-1.5 font-semibold text-[#004567]">RP WAC</td>
+              {forecastYears.map((_, i) => <td key={i} className="px-3 py-1.5 text-center font-mono">{fmtD(rp.wacPerUnit[i] ?? 0)}</td>)}
+            </tr>
+            <tr className="bg-white">
+              <td className="px-3 py-1.5 font-semibold text-[#004567]">WAC Savings vs RP</td>
+              {forecast.map((f, i) => {
+                const saving = (rp.wacPerUnit[i] ?? 0) - f.wacPerUnit;
+                return <td key={i} className={`px-3 py-1.5 text-center font-mono font-bold ${saving > 0 ? 'text-green-600' : 'text-red-600'}`}>{fmtD(saving)}</td>;
+              })}
+            </tr>
+            <tr className="bg-[#EAECEC]/40">
+              <td className="px-3 py-1.5 font-semibold text-[#004567]">Effective Net $/Unit</td>
+              {annualData.map((d, i) => <td key={i} className="px-3 py-1.5 text-center font-mono">{fmtD(d.units > 0 ? d.netSalesAfterIRA / d.units : 0)}</td>)}
+            </tr>
+            <tr className="bg-white">
+              <td className="px-3 py-1.5 font-semibold text-[#004567]">PBM Rebate %</td>
+              {rebates.map((r, i) => <td key={i} className="px-3 py-1.5 text-center font-mono">{r.comPbm.toFixed(1)}%</td>)}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MAIN — Results Page
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function ResultsPage() {
-  const [innerTab, setInnerTab] = useState<'gtn' | 'asp' | 'buybill'>('gtn');
+  const benefitType = useStore(s => s.benefitType);
+  const isBnB = benefitType === 'buy-and-bill';
+  const saveScenario = useStore(s => s.saveScenario);
+  const activeScenarioId = useStore(s => s.activeScenarioId);
+  const scenarios = useStore(s => s.scenarios);
+  const dirty = useStore(s => s.dirty);
+  const setActiveTab = useStore(s => s.setActiveTab);
+
+  const [innerTab, setInnerTab] = useState<'gtn' | 'asp' | 'buybill' | 'payer'>('gtn');
+  const [showSaveAs, setShowSaveAs] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [saveDesc, setSaveDesc] = useState('');
+  const [saveToast, setSaveToast] = useState(false);
+
   const { annualData } = useComputedData();
   const lastUpdated = useRef(new Date());
 
@@ -587,22 +717,98 @@ export function ResultsPage() {
     lastUpdated.current = new Date();
   }, [annualData]);
 
-  const tabs = [
-    { key: 'gtn' as const, label: 'GTN Summary' },
-    { key: 'asp' as const, label: 'ASP Analysis' },
-    { key: 'buybill' as const, label: 'Buy & Bill / IDN' },
-  ];
+  const active = activeScenarioId ? scenarios[activeScenarioId] : null;
+  const scenarioCount = Object.keys(scenarios).length;
+
+  const handleQuickSave = () => {
+    if (active) {
+      saveScenario(active.name, active.description, active.tags);
+      setSaveToast(true);
+      setTimeout(() => setSaveToast(false), 3000);
+    }
+  };
+
+  const handleSaveAs = () => {
+    if (!saveName.trim()) return;
+    saveScenario(saveName.trim(), saveDesc.trim(), []);
+    setShowSaveAs(false);
+    setSaveName(''); setSaveDesc('');
+    setSaveToast(true);
+    setTimeout(() => setSaveToast(false), 3000);
+  };
+
+  const tabs = isBnB
+    ? [
+        { key: 'gtn' as const, label: 'GTN Summary' },
+        { key: 'asp' as const, label: 'ASP Analysis' },
+        { key: 'buybill' as const, label: 'Provider Economics' },
+      ]
+    : [
+        { key: 'gtn' as const, label: 'GTN Summary' },
+        { key: 'asp' as const, label: 'ASP Analysis' },
+        { key: 'payer' as const, label: 'Payer / PBM Analysis' },
+      ];
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-[#004567]">Model Results</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold text-[#004567]">Model Results</h2>
+          <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${isBnB ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+            {isBnB ? '💉 Buy & Bill' : '💊 Pharmacy Benefit'}
+          </span>
+        </div>
         <span className="text-xs px-3 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 font-mono">
           ✓ Results current as of {lastUpdated.current.toLocaleTimeString()}
         </span>
       </div>
 
-      {/* Inner tab switcher */}
+      {/* Save Scenario bar */}
+      <div className="flex items-center gap-3 p-3 bg-[#F7F9FC] rounded-lg border border-[#EAECEC]">
+        <div className="flex items-center gap-2 flex-1">
+          <span className="text-xs font-semibold text-[#004567]">
+            {active ? `${active.name} (v${active.version})` : 'Unsaved'}
+          </span>
+          {dirty && <span className="w-2 h-2 rounded-full bg-amber-400" title="Unsaved changes" />}
+        </div>
+        {active && !active.locked && dirty && (
+          <button onClick={handleQuickSave}
+            className="text-xs px-3 py-1.5 bg-[#004567] text-white rounded font-semibold hover:bg-[#004466]">
+            Save
+          </button>
+        )}
+        <button onClick={() => setShowSaveAs(!showSaveAs)}
+          className="text-xs px-3 py-1.5 bg-[#C98B27] text-white rounded font-semibold hover:bg-[#b07a20]">
+          Save As New Scenario
+        </button>
+      </div>
+
+      {showSaveAs && (
+        <div className="p-3 bg-[#FFF9EE] border border-[#C98B27] rounded-lg space-y-2">
+          <input type="text" placeholder="Scenario name" value={saveName} onChange={e => setSaveName(e.target.value)}
+            className="w-full px-3 py-1.5 border border-[#EAECEC] rounded text-sm text-[#004567] focus:ring-1 focus:ring-[#C98B27] outline-none" />
+          <input type="text" placeholder="Description (optional)" value={saveDesc} onChange={e => setSaveDesc(e.target.value)}
+            className="w-full px-3 py-1.5 border border-[#EAECEC] rounded text-sm text-[#44546A] focus:ring-1 focus:ring-[#C98B27] outline-none" />
+          <div className="flex gap-2">
+            <button onClick={handleSaveAs} className="text-xs px-4 py-1.5 bg-[#004567] text-white rounded font-semibold hover:bg-[#004466]">Save</button>
+            <button onClick={() => setShowSaveAs(false)} className="text-xs px-4 py-1.5 border border-[#EAECEC] rounded font-semibold text-[#44546A]">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {saveToast && (
+        <div className="text-xs px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded">
+          ✓ Scenario saved successfully
+        </div>
+      )}
+
+      {scenarioCount >= 2 && (
+        <button onClick={() => setActiveTab('scenarios')}
+          className="text-xs text-[#C98B27] underline hover:text-[#b07a20]">
+          Compare with other scenarios ({scenarioCount} saved)
+        </button>
+      )}
+
       <div className="flex gap-1 bg-[#EAECEC] rounded-lg p-1 w-fit">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setInnerTab(t.key)}
@@ -616,6 +822,7 @@ export function ResultsPage() {
       {innerTab === 'gtn' && <GTNSummaryTab />}
       {innerTab === 'asp' && <ASPAnalysisTab />}
       {innerTab === 'buybill' && <BuyBillAnalysisTab />}
+      {innerTab === 'payer' && <PayerPBMTab />}
     </div>
   );
 }

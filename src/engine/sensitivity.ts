@@ -1,8 +1,8 @@
 import { CHANNELS } from './constants';
-import { expandToMonthly, computeASPSeries, computeGTN, annualRollup } from './compute';
+import { expandToMonthly, computeASPSeries, computeGTN, annualRollup, computeIRARebate, applyIRAToAnnual } from './compute';
 import type {
   ForecastRow, ChannelAllocation, DiscountRates, RebateRates, OtherRates, IDN,
-  MonthlyRow, ASPRow, AnnualGTN,
+  MonthlyRow, ASPRow, AnnualGTN, ReferenceProduct, IRAConfig,
 } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -48,6 +48,8 @@ export interface BaseAssumptions {
   otherRates: OtherRates[];
   idnList: IDN[];
   activeChannels: string[];
+  referenceProduct?: ReferenceProduct;
+  iraConfig?: IRAConfig;
 }
 
 // ── Pipeline helpers ─────────────────────────────────────────────────────
@@ -62,8 +64,8 @@ function buildDicts(assumptions: BaseAssumptions) {
   const rebateByYear: Record<number, { comPbm: number; comMed: number; mcrD: number; mcaid: number; manMcaid: number }> = {};
   for (const r of assumptions.rebates) rebateByYear[r.year] = { comPbm: r.comPbm, comMed: r.comMed, mcrD: r.mcrD, mcaid: r.mcaid, manMcaid: r.manMcaid };
 
-  const otherByYear: Record<number, { adminFee: number; distFee: number; copay: number; returns: number }> = {};
-  for (const o of assumptions.otherRates) otherByYear[o.year] = { adminFee: o.adminFee, distFee: o.distFee, copay: o.copay, returns: o.returns };
+  const otherByYear: Record<number, { adminFee: number; distFee: number; copay: number; returns: number; specialtyPharmFee: number; papCost: number }> = {};
+  for (const o of assumptions.otherRates) otherByYear[o.year] = { adminFee: o.adminFee, distFee: o.distFee, copay: o.copay, returns: o.returns, specialtyPharmFee: o.specialtyPharmFee ?? 0, papCost: o.papCost ?? 0 };
 
   return { channelAllocByYear, discountByYear, rebateByYear, otherByYear };
 }
@@ -73,7 +75,19 @@ function runPipeline(assumptions: BaseAssumptions): { annual: AnnualGTN[]; aspDa
   const monthly = expandToMonthly(assumptions.forecast);
   const aspData = computeASPSeries(monthly, channelAllocByYear, discountByYear);
   const gtnData = computeGTN(monthly, aspData, channelAllocByYear, discountByYear, rebateByYear, otherByYear);
-  const annual = annualRollup(gtnData);
+  let annual = annualRollup(gtnData);
+
+  // Apply IRA if configured
+  if (assumptions.iraConfig?.enabled) {
+    const effectiveIRA = {
+      ...assumptions.iraConfig,
+      baselineASP: assumptions.iraConfig.baselineASP > 0 ? assumptions.iraConfig.baselineASP
+        : (aspData.length > 0 ? aspData.filter(a => a.year === assumptions.forecast[0]?.year).reduce((s, a) => s + a.rollingASP6M, 0) / Math.max(1, aspData.filter(a => a.year === assumptions.forecast[0]?.year).length) : 0),
+    };
+    const iraResults = computeIRARebate(gtnData, aspData, effectiveIRA, channelAllocByYear);
+    annual = applyIRAToAnnual(annual, iraResults);
+  }
+
   return { annual, aspData };
 }
 
@@ -105,7 +119,7 @@ function cloneAssumptions(a: BaseAssumptions): BaseAssumptions {
   return JSON.parse(JSON.stringify(a));
 }
 
-function getInputVars(): InputVar[] {
+function getInputVars(benefitType?: 'buy-and-bill' | 'pharmacy-benefit'): InputVar[] {
   const vars: InputVar[] = [];
 
   // WAC
@@ -201,7 +215,108 @@ function getInputVars(): InputVar[] {
     });
   }
 
+  // AMP per Unit
+  vars.push({
+    name: 'AMP per Unit',
+    apply: (base, delta) => {
+      const a = cloneAssumptions(base);
+      a.forecast = a.forecast.map(f => ({ ...f, ampPerUnit: f.ampPerUnit * (1 + delta / 100) }));
+      return a;
+    },
+  });
+
+  // Specialty Pharmacy Fee
+  vars.push({
+    name: 'Specialty Pharm Fee',
+    apply: (base, delta) => {
+      const a = cloneAssumptions(base);
+      a.otherRates = a.otherRates.map(o => ({ ...o, specialtyPharmFee: Math.max(0, (o.specialtyPharmFee ?? 0) * (1 + delta / 100)) }));
+      return a;
+    },
+  });
+
+  // PAP Cost
+  vars.push({
+    name: 'PAP / Copay Assist',
+    apply: (base, delta) => {
+      const a = cloneAssumptions(base);
+      a.otherRates = a.otherRates.map(o => ({ ...o, papCost: Math.max(0, (o.papCost ?? 0) * (1 + delta / 100)) }));
+      return a;
+    },
+  });
+
+  // Forecast Volume
+  vars.push({
+    name: 'Forecast Volume',
+    apply: (base, delta) => {
+      const a = cloneAssumptions(base);
+      a.forecast = a.forecast.map(f => ({ ...f, annualUnits: Math.max(0, Math.round(f.annualUnits * (1 + delta / 100))) }));
+      return a;
+    },
+  });
+
+  // Filter by benefit type if specified
+  if (benefitType) {
+    const bnbNames = new Set(['GPO Discount', 'IDN Discount', '340B Discount', 'VA FSS Discount',
+      'Commercial PBM Mix', 'Medicare Part B Mix', 'GPO/IDN Non-340B Mix']);
+    const pbxNames = new Set(['Com PBM Rebate', 'Com Med Rebate', 'Mcr Part D Rebate',
+      'Managed Mcaid Rebate', 'Medicaid FFS Rebate', 'Specialty Pharm Fee', 'PAP / Copay Assist',
+      'Commercial PBM Mix', 'Medicare Part D Mix']);
+    const commonNames = new Set(['WAC per Unit', 'AMP per Unit', 'Forecast Volume',
+      'Admin Fee', 'Dist Fee', 'Returns']);
+    const allowed = benefitType === 'buy-and-bill'
+      ? new Set([...commonNames, ...bnbNames])
+      : new Set([...commonNames, ...pbxNames]);
+    return vars.filter(v => allowed.has(v.name));
+  }
+
   return vars;
+}
+
+// ── Rebate Stress Test (Pharmacy Benefit) ────────────────────────────────
+
+export interface RebateStressParams {
+  pbmRebate: number;
+  partDRebate: number;
+  manMcaidRebate: number;
+  specPharmFee: number;
+  papCost: number;
+  pbmMix: number;
+}
+
+export function runRebateStressTest(
+  baseAssumptions: BaseAssumptions,
+  params: RebateStressParams,
+): { annual: AnnualGTN[] } {
+  const a = cloneAssumptions(baseAssumptions);
+  // Override rebates
+  a.rebates = a.rebates.map(r => ({
+    ...r,
+    comPbm: params.pbmRebate,
+    mcrD: params.partDRebate,
+    manMcaid: params.manMcaidRebate,
+  }));
+  // Override fees
+  a.otherRates = a.otherRates.map(o => ({
+    ...o,
+    specialtyPharmFee: params.specPharmFee,
+    papCost: params.papCost,
+  }));
+  // Override PBM mix — redistribute remaining proportionally
+  a.channelAllocations = a.channelAllocations.map(ca => {
+    const alloc = { ...ca.allocations };
+    const oldPbm = alloc['Commercial PBM'] ?? 0;
+    alloc['Commercial PBM'] = params.pbmMix;
+    const diff = params.pbmMix - oldPbm;
+    const others = Object.keys(alloc).filter(k => k !== 'Commercial PBM');
+    const othersSum = others.reduce((s, k) => s + alloc[k], 0);
+    if (othersSum > 0) {
+      for (const k of others) alloc[k] = Math.max(0, alloc[k] - diff * (alloc[k] / othersSum));
+    }
+    return { ...ca, allocations: alloc };
+  });
+  const { annual } = runPipeline(a);
+  return { annual };
 }
 
 export function runTornado(
@@ -209,10 +324,11 @@ export function runTornado(
   targetMetric: TargetMetric,
   variationPct: number,
   targetYear?: number,
+  benefitType?: 'buy-and-bill' | 'pharmacy-benefit',
 ): TornadoResult[] {
   const { annual: baseAnnual, aspData: baseASP } = runPipeline(base);
   const baseValue = extractMetric(baseAnnual, baseASP, targetMetric, targetYear);
-  const vars = getInputVars();
+  const vars = getInputVars(benefitType);
   const results: TornadoResult[] = [];
 
   for (const v of vars) {
@@ -286,7 +402,8 @@ export function runStressTest(
   discountByYear: Record<number, { gpo: number; idn: number; b340: number; va: number }>,
   params: StressParams,
 ): ASPRow[] {
-  const stressedMonthly = monthly.map(r => ({ ...r, wac: r.wac * (params.wacPct / 100) }));
+  const wacMult = params.wacPct / 100;
+  const stressedMonthly = monthly.map(r => ({ ...r, wac: r.wac * wacMult, amp: r.amp * wacMult }));
 
   const stressedAllocByYear: Record<number, Record<string, number>> = {};
   for (const yr of forecastYears) {

@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import type {
   ForecastRow, ChannelAllocation, DiscountRates, RebateRates, OtherRates,
-  AnnualGTN, ASPRow, GTNRow,
+  AnnualGTN, ASPRow, GTNRow, ReferenceProduct,
 } from '../types';
 import { MONTH_PROFILES } from './constants';
 
@@ -28,6 +28,7 @@ export function generateTemplate(
   rebates: RebateRates[],
   otherRates: OtherRates[],
   channels: string[],
+  referenceProduct?: ReferenceProduct,
 ): Uint8Array {
   const wb = XLSX.utils.book_new();
 
@@ -38,21 +39,24 @@ export function generateTemplate(
     ['Instructions:'],
     ['1. Fill in each sheet with your forecast assumptions.'],
     ['2. Do NOT rename sheets or change column headers.'],
-    ['3. The "Volumes" sheet contains annual unit volumes and WAC per unit.'],
+    ['3. Volumes: Annual Units, WAC per Unit, AMP per Unit (default 85% of WAC), Monthly Profile'],
     ['4. Monthly Profile must be one of: Flat, S-Curve (Launch), Back-Loaded, Front-Loaded'],
-    ['5. The "Channel Mix" sheet allocations must sum to 100% per year.'],
-    ['6. Discount, rebate, and fee rates are entered as percentages (e.g. 14.0 means 14%).'],
-    ['7. Save the file and upload it back into AccessLens.'],
+    ['5. Channel Mix: allocations must sum to 100% per year.'],
+    ['6. Discounts/Rebates/Fees: entered as percentages (e.g. 14.0 means 14%).'],
+    ['7. Fees include Specialty Pharm % and PAP/Copay Assist % for biosimilar programs.'],
+    ['8. Reference Product: RP WAC and total market units for competitive positioning.'],
+    ['9. IRA Config: Inflation Reduction Act rebate parameters (optional).'],
+    ['10. Save the file and upload it back into AccessLens.'],
   ];
   const wsInstr = XLSX.utils.aoa_to_sheet(instrData);
   wsInstr['!cols'] = [{ wch: 80 }];
   XLSX.utils.book_append_sheet(wb, wsInstr, 'Instructions');
 
   // Volumes sheet
-  const volHeaders = ['Year', 'Annual Units', 'WAC per Unit', 'Monthly Profile'];
-  const volRows = forecast.map(f => [f.year, f.annualUnits, f.wacPerUnit, f.monthlyProfile]);
+  const volHeaders = ['Year', 'Annual Units', 'WAC per Unit', 'AMP per Unit', 'Monthly Profile'];
+  const volRows = forecast.map(f => [f.year, f.annualUnits, f.wacPerUnit, f.ampPerUnit, f.monthlyProfile]);
   const wsVol = XLSX.utils.aoa_to_sheet([volHeaders, ...volRows]);
-  wsVol['!cols'] = [{ wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 20 }];
+  wsVol['!cols'] = [{ wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 }];
   XLSX.utils.book_append_sheet(wb, wsVol, 'Volumes');
 
   // Channel Mix sheet
@@ -77,13 +81,37 @@ export function generateTemplate(
   XLSX.utils.book_append_sheet(wb, wsReb, 'Rebates');
 
   // Fees sheet
-  const feeHeaders = ['Year', 'Admin Fee %', 'Dist Fee %', 'Copay Support %', 'Returns %'];
-  const feeRows = otherRates.map(o => [o.year, o.adminFee, o.distFee, o.copay, o.returns]);
+  const feeHeaders = ['Year', 'Admin Fee %', 'Dist Fee %', 'Copay Support %', 'Returns %', 'Specialty Pharm %', 'PAP / Copay Assist %'];
+  const feeRows = otherRates.map(o => [o.year, o.adminFee, o.distFee, o.copay, o.returns, o.specialtyPharmFee ?? 0, o.papCost ?? 0]);
   const wsFee = XLSX.utils.aoa_to_sheet([feeHeaders, ...feeRows]);
   wsFee['!cols'] = feeHeaders.map(() => ({ wch: 16 }));
   XLSX.utils.book_append_sheet(wb, wsFee, 'Fees');
 
+  // Reference Product sheet (optional)
+  if (referenceProduct) {
+    const rpHeaders = ['Year', 'RP WAC', 'Total Market Units'];
+    const rpRows = forecast.map((f, i) => [f.year, referenceProduct.wacPerUnit[i] ?? 0, referenceProduct.totalMarketUnits[i] ?? 0]);
+    const wsRP = XLSX.utils.aoa_to_sheet([rpHeaders, ...rpRows]);
+    wsRP['!cols'] = [{ wch: 8 }, { wch: 14 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, wsRP, 'Reference Product');
+  }
+
   return new Uint8Array(XLSX.write(wb, { bookType: 'xlsx', type: 'array' }));
+}
+
+// Standalone IRA sheet generator (called from exportAssumptions with iraConfig)
+export function addIRASheet(wb: XLSX.WorkBook, iraConfig?: { enabled: boolean; baselineASP: number; baselineYear: number; annualCPIU: number }) {
+  if (!iraConfig) return;
+  const iraData = [
+    ['IRA Configuration'],
+    ['Enabled', iraConfig.enabled ? 'Y' : 'N'],
+    ['Baseline ASP', iraConfig.baselineASP],
+    ['Baseline Year', iraConfig.baselineYear],
+    ['Annual CPI-U %', iraConfig.annualCPIU],
+  ];
+  const wsIRA = XLSX.utils.aoa_to_sheet(iraData);
+  wsIRA['!cols'] = [{ wch: 16 }, { wch: 14 }];
+  XLSX.utils.book_append_sheet(wb, wsIRA, 'IRA Config');
 }
 
 // ── Upload Parsing ───────────────────────────────────────────────────────
@@ -118,6 +146,8 @@ export async function parseUpload(file: File): Promise<{ data: ParsedData; error
       const year = Number(r['Year']);
       const units = Number(r['Annual Units']);
       const wac = Number(r['WAC per Unit']);
+      const ampRaw = r['AMP per Unit'];
+      const amp = ampRaw !== undefined && ampRaw !== '' ? Number(ampRaw) : NaN;
       const profile = String(r['Monthly Profile'] ?? 'Flat');
 
       if (isNaN(year)) { errors.push(`Volumes row ${i + 2}: invalid Year`); continue; }
@@ -125,8 +155,13 @@ export async function parseUpload(file: File): Promise<{ data: ParsedData; error
       if (isNaN(wac) || wac <= 0) { errors.push(`Volumes row ${i + 2}: WAC must be > 0`); continue; }
       if (!profileOptions.includes(profile)) { errors.push(`Volumes row ${i + 2}: Profile must be one of ${profileOptions.join(', ')}`); }
 
+      const finalWac = Math.round(wac * 100) / 100;
+      // Default AMP to 85% of WAC if not provided
+      const finalAmp = !isNaN(amp) && amp > 0 ? Math.round(amp * 100) / 100 : Math.round(finalWac * 0.85 * 100) / 100;
+
       forecast.push({
-        year, annualUnits: Math.round(units), wacPerUnit: Math.round(wac * 100) / 100,
+        year, annualUnits: Math.round(units), wacPerUnit: finalWac,
+        ampPerUnit: finalAmp,
         monthlyProfile: profileOptions.includes(profile) ? profile : 'Flat',
       });
     }
@@ -207,7 +242,9 @@ export async function parseUpload(file: File): Promise<{ data: ParsedData; error
       const distFee = Number(r['Dist Fee %']) || 0;
       const copay = Number(r['Copay Support %']) || 0;
       const returns = Number(r['Returns %']) || 0;
-      otherRates.push({ year, adminFee, distFee, copay, returns });
+      const specialtyPharmFee = Number(r['Specialty Pharm %']) || 1.5;
+      const papCost = Number(r['PAP / Copay Assist %']) || 4.0;
+      otherRates.push({ year, adminFee, distFee, copay, returns, specialtyPharmFee, papCost });
     }
   }
 
@@ -238,10 +275,11 @@ export function exportResults(
 
   // Annual Summary
   const annHeaders = ['Year', 'Units', 'Gross Sales', 'Rebates', 'Chargebacks', 'Fees/Other',
-    'Total Deductions', 'Net Sales', 'GTN %', 'Net $/Unit', 'Net % of WAC'];
+    'Total Deductions', 'Net Sales', 'IRA Rebate', 'Net After IRA', 'GTN %', 'Net $/Unit', 'Net % of WAC'];
   const annRows = annualData.map(d => [
     d.year, d.units, d.grossSales, d.totalRebates, d.totalChargebacks, d.totalOther,
-    d.totalDeductions, d.netSales, d.gtnPct, d.netPrice, d.netPct,
+    d.totalDeductions, d.netSales, d.iraRebate ?? 0, d.netSalesAfterIRA ?? d.netSales,
+    d.gtnPct, d.netPrice, d.netPct,
   ]);
   const wsAnn = XLSX.utils.aoa_to_sheet([annHeaders, ...annRows]);
   wsAnn['!cols'] = annHeaders.map(() => ({ wch: 16 }));
@@ -249,10 +287,11 @@ export function exportResults(
 
   // Monthly GTN
   const gtnHeaders = ['Period', 'Year', 'Month', 'Units', 'WAC', 'Gross Sales', 'Total Rebates',
-    'Total Chargebacks', 'Total Other', 'Total Deductions', 'Net Sales', 'GTN %'];
+    'Total Chargebacks', 'Total Other', 'Total Deductions', 'Net Sales', 'GTN %', 'Best Price', 'Eff. Mcaid Rebate'];
   const gtnRows = gtnData.map(d => [
     d.period, d.year, d.month, d.units, d.wac, d.grossSales,
     d.totalRebates, d.totalChargebacks, d.totalOther, d.totalDeductions, d.netSales, d.gtnPct,
+    d.bestPrice ?? 0, d.effectiveMcaidRebate ?? 0,
   ]);
   const wsGTN = XLSX.utils.aoa_to_sheet([gtnHeaders, ...gtnRows]);
   wsGTN['!cols'] = gtnHeaders.map(() => ({ wch: 14 }));
@@ -281,7 +320,7 @@ export function exportAssumptions(
   rebates: RebateRates[],
   otherRates: OtherRates[],
   channels: string[],
+  referenceProduct?: ReferenceProduct,
 ): Uint8Array {
-  // Same format as template but with current values
-  return generateTemplate(forecast, channelAllocations, discounts, rebates, otherRates, channels);
+  return generateTemplate(forecast, channelAllocations, discounts, rebates, otherRates, channels, referenceProduct);
 }

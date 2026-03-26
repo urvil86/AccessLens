@@ -237,18 +237,22 @@ function CompareView({ ids }: { ids: string[] }) {
 
   // Delta table — collect all years from first scenario
   const years = compareData[0].annual.map(a => a.year);
-  const metrics = ['Total Units', 'Gross Sales', 'Net Sales', 'GTN %', 'Net $/Unit'];
+  const metrics = ['Total Units', 'Gross Sales', 'Net Sales', 'IRA Rebate', 'Net After IRA', 'GTN %', 'Net $/Unit'];
 
   const getMetric = (annual: ReturnType<typeof annualRollup>, metric: string) => {
     const totalUnits = annual.reduce((s, a) => s + a.units, 0);
     const totalGross = annual.reduce((s, a) => s + a.grossSales, 0);
     const totalNet = annual.reduce((s, a) => s + a.netSales, 0);
+    const totalIRA = annual.reduce((s, a) => s + (a.iraRebate ?? 0), 0);
+    const totalNetAfterIRA = annual.reduce((s, a) => s + (a.netSalesAfterIRA ?? a.netSales), 0);
     const avgGtn = annual.length > 0 ? annual.reduce((s, a) => s + a.gtnPct, 0) / annual.length : 0;
     const avgNetPrice = totalUnits > 0 ? totalNet / totalUnits : 0;
     switch (metric) {
       case 'Total Units': return totalUnits;
       case 'Gross Sales': return totalGross;
       case 'Net Sales': return totalNet;
+      case 'IRA Rebate': return totalIRA;
+      case 'Net After IRA': return totalNetAfterIRA;
       case 'GTN %': return avgGtn;
       case 'Net $/Unit': return avgNetPrice;
       default: return 0;
@@ -258,7 +262,7 @@ function CompareView({ ids }: { ids: string[] }) {
   const formatMetric = (metric: string, v: number) => {
     switch (metric) {
       case 'Total Units': return fmtU(v);
-      case 'Gross Sales': case 'Net Sales': return fmtSales(v);
+      case 'Gross Sales': case 'Net Sales': case 'IRA Rebate': case 'Net After IRA': return fmtSales(v);
       case 'GTN %': return fmtPct(v);
       case 'Net $/Unit': return fmtD(v);
       default: return String(v);

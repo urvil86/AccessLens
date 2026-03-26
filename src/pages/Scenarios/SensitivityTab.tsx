@@ -5,9 +5,10 @@ import { fmtD, fmtPct, fmtM, fmtSales } from '../../engine/compute';
 import { SectionHeader } from '../../shared/SectionHeader';
 import { DataTable } from '../../shared/DataTable';
 import {
-  runTornado, runTwoWay, runStressTest, runRescueSimulator,
-  type TargetMetric, type BaseAssumptions, type StressParams, type RescueParams,
+  runTornado, runTwoWay, runStressTest, runRescueSimulator, runRebateStressTest,
+  type TargetMetric, type BaseAssumptions, type StressParams, type RescueParams, type RebateStressParams,
 } from '../../engine/sensitivity';
+import type { BenefitType } from '../../types';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, ReferenceLine, Cell,
@@ -32,6 +33,7 @@ function SliderRow({ label, value, onChange, min, max, step = 1, suffix = '%' }:
 
 function TornadoSection() {
   const store = useStore();
+  const benefitType = store.benefitType;
   const { forecastYears } = useComputedData();
   const [metric, setMetric] = useState<TargetMetric>('netSales');
   const [variation, setVariation] = useState(10);
@@ -47,13 +49,15 @@ function TornadoSection() {
     otherRates: store.otherRates,
     idnList: store.idnList,
     activeChannels: store.activeChannels,
-  }), [store.forecast, store.channelAllocations, store.discounts, store.rebates, store.otherRates, store.idnList, store.activeChannels]);
+    referenceProduct: store.referenceProduct,
+    iraConfig: store.iraConfig,
+  }), [store.forecast, store.channelAllocations, store.discounts, store.rebates, store.otherRates, store.idnList, store.activeChannels, store.referenceProduct, store.iraConfig]);
 
   const handleRun = () => {
     setRunning(true);
     // Use setTimeout to allow UI to show spinner
     setTimeout(() => {
-      const r = runTornado(baseAssumptions, metric, variation, targetYear);
+      const r = runTornado(baseAssumptions, metric, variation, targetYear, benefitType);
       setResults(r.slice(0, 15));
       setRunning(false);
     }, 10);
@@ -139,16 +143,23 @@ function TornadoSection() {
 // B — Two-Way Sensitivity
 // ═══════════════════════════════════════════════════════════════════════════
 
-const VARIABLE_OPTIONS = [
-  'WAC per Unit', 'Com PBM Rebate', 'Com Med Rebate', 'Mcr Part D Rebate',
-  'GPO Discount', 'IDN Discount', '340B Discount', 'Admin Fee',
-  'Commercial PBM Mix', 'Medicare Part B Mix',
-];
+function getVariableOptions(bt: BenefitType): string[] {
+  const common = ['WAC per Unit', 'AMP per Unit', 'Forecast Volume', 'Admin Fee', 'Dist Fee', 'Returns'];
+  const bnbOnly = ['GPO Discount', 'IDN Discount', '340B Discount', 'VA FSS Discount',
+    'Medicare Part B Mix', 'GPO/IDN Non-340B Mix'];
+  const pbxOnly = ['Com PBM Rebate', 'Com Med Rebate', 'Mcr Part D Rebate',
+    'Managed Mcaid Rebate', 'Medicaid FFS Rebate',
+    'Specialty Pharm Fee', 'PAP / Copay Assist',
+    'Commercial PBM Mix', 'Medicare Part D Mix'];
+  return bt === 'buy-and-bill' ? [...common, ...bnbOnly] : [...common, ...pbxOnly];
+}
 
 function TwoWaySection() {
   const store = useStore();
-  const [var1Name, setVar1Name] = useState('GPO Discount');
-  const [var2Name, setVar2Name] = useState('Com PBM Rebate');
+  const isBnB = store.benefitType === 'buy-and-bill';
+  const varOptions = getVariableOptions(store.benefitType);
+  const [var1Name, setVar1Name] = useState(isBnB ? 'GPO Discount' : 'Com PBM Rebate');
+  const [var2Name, setVar2Name] = useState('Forecast Volume');
   const [metric, setMetric] = useState<TargetMetric>('netSales');
   const [range, setRange] = useState(15);
   const [steps, setSteps] = useState(5);
@@ -159,7 +170,8 @@ function TwoWaySection() {
     forecast: store.forecast, channelAllocations: store.channelAllocations,
     discounts: store.discounts, rebates: store.rebates, otherRates: store.otherRates,
     idnList: store.idnList, activeChannels: store.activeChannels,
-  }), [store.forecast, store.channelAllocations, store.discounts, store.rebates, store.otherRates, store.idnList, store.activeChannels]);
+    referenceProduct: store.referenceProduct, iraConfig: store.iraConfig,
+  }), [store.forecast, store.channelAllocations, store.discounts, store.rebates, store.otherRates, store.idnList, store.activeChannels, store.referenceProduct, store.iraConfig]);
 
   const handleGenerate = () => {
     setRunning(true);
@@ -189,14 +201,14 @@ function TwoWaySection() {
           <label className="text-xs font-semibold text-[#44546A] block mb-1">Variable 1 (rows)</label>
           <select value={var1Name} onChange={e => setVar1Name(e.target.value)}
             className="border border-[#EAECEC] rounded px-3 py-1.5 text-sm focus:ring-1 focus:ring-[#C98B27] outline-none">
-            {VARIABLE_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
+            {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         </div>
         <div>
           <label className="text-xs font-semibold text-[#44546A] block mb-1">Variable 2 (columns)</label>
           <select value={var2Name} onChange={e => setVar2Name(e.target.value)}
             className="border border-[#EAECEC] rounded px-3 py-1.5 text-sm focus:ring-1 focus:ring-[#C98B27] outline-none">
-            {VARIABLE_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
+            {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         </div>
         <div>
@@ -503,16 +515,210 @@ function RescueSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// E — Rebate & Formulary Stress Test (Pharmacy Benefit)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function RebateStressSection() {
+  const store = useStore();
+  const { annualData, forecastYears } = useComputedData();
+  const [pbmRebate, setPbmRebate] = useState(25);
+  const [partDRebate, setPartDRebate] = useState(22);
+  const [manMcaidRebate, setManMcaidRebate] = useState(32);
+  const [specPharmFee, setSpecPharmFee] = useState(2.5);
+  const [papCost, setPapCost] = useState(6);
+  const [pbmMix, setPbmMix] = useState(40);
+
+  const baseAssumptions: BaseAssumptions = useMemo(() => ({
+    forecast: store.forecast, channelAllocations: store.channelAllocations,
+    discounts: store.discounts, rebates: store.rebates, otherRates: store.otherRates,
+    idnList: store.idnList, activeChannels: store.activeChannels,
+    referenceProduct: store.referenceProduct, iraConfig: store.iraConfig,
+  }), [store.forecast, store.channelAllocations, store.discounts, store.rebates, store.otherRates, store.idnList, store.activeChannels, store.referenceProduct, store.iraConfig]);
+
+  const params: RebateStressParams = { pbmRebate, partDRebate, manMcaidRebate, specPharmFee, papCost, pbmMix };
+
+  const stressResult = useMemo(() => runRebateStressTest(baseAssumptions, params),
+    [baseAssumptions, pbmRebate, partDRebate, manMcaidRebate, specPharmFee, papCost, pbmMix]);
+
+  const formularyStatus = pbmRebate > 25 ? 'PREFERRED' : pbmRebate >= 15 ? 'NON-PREFERRED' : 'NON-FORMULARY';
+  const formularyColor = pbmRebate > 25 ? 'border-green-400 bg-green-50 text-green-700' : pbmRebate >= 15 ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-red-400 bg-red-50 text-red-700';
+
+  const chartData = forecastYears.map((yr, i) => {
+    const base = annualData[i];
+    const stress = stressResult.annual[i];
+    return {
+      year: yr,
+      'Base Net $/Unit': base ? (base.units > 0 ? base.netSales / base.units : 0) : 0,
+      'Stress Net $/Unit': stress ? (stress.units > 0 ? stress.netSales / stress.units : 0) : 0,
+      'Base GTN %': base?.gtnPct ?? 0,
+      'Stress GTN %': stress?.gtnPct ?? 0,
+    };
+  });
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader>Rebate &amp; Formulary Stress Test</SectionHeader>
+      <div className="border-2 border-amber-300 rounded-xl p-4 bg-amber-50/20">
+        <p className="text-xs text-[#44546A] mb-3">
+          Stress rebate rates and fee assumptions to see their impact on net price and formulary positioning.
+        </p>
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.6fr] gap-6">
+          <div className="space-y-3">
+            <SliderRow label="PBM Rebate %" value={pbmRebate} onChange={setPbmRebate} min={0} max={60} step={0.5} />
+            <SliderRow label="Part D Rebate %" value={partDRebate} onChange={setPartDRebate} min={0} max={50} step={0.5} />
+            <SliderRow label="Managed Mcaid Rebate %" value={manMcaidRebate} onChange={setManMcaidRebate} min={0} max={55} step={0.5} />
+            <SliderRow label="Specialty Pharm Fee %" value={specPharmFee} onChange={setSpecPharmFee} min={0} max={8} step={0.1} />
+            <SliderRow label="PAP/Copay Cost %" value={papCost} onChange={setPapCost} min={0} max={15} step={0.5} />
+            <SliderRow label="PBM Channel Mix %" value={pbmMix} onChange={setPbmMix} min={10} max={80} />
+
+            <div className={`rounded-lg p-3 border-2 text-center ${formularyColor}`}>
+              <div className="text-xs font-bold mb-1">Formulary Risk</div>
+              <div className="text-lg font-bold">{formularyStatus}</div>
+              <div className="text-[10px]">PBM Rebate: {pbmRebate}%</div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-[#EAECEC] p-3">
+            <ResponsiveContainer width="100%" height={350}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
+                <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}`} tick={{ fontSize: 10 }} />
+                <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: number) => [fmtD(v)]} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Line dataKey="Base Net $/Unit" stroke="#9296B2" strokeWidth={2} strokeDasharray="5 3" dot={false} />
+                <Line dataKey="Stress Net $/Unit" stroke="#C98B27" strokeWidth={2.5} dot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="flex gap-2 mt-4 flex-wrap">
+          {forecastYears.map((yr, i) => {
+            const base = annualData[i];
+            const stress = stressResult.annual[i];
+            const baseGtn = base?.gtnPct ?? 0;
+            const stressGtn = stress?.gtnPct ?? 0;
+            return (
+              <div key={yr} className="rounded-lg px-3 py-2 text-center border border-[#EAECEC] bg-white">
+                <div className="font-bold text-xs text-[#004567]">{yr}</div>
+                <div className="text-[10px] font-mono text-[#9296B2]">Base: {baseGtn.toFixed(1)}%</div>
+                <div className={`text-[10px] font-mono font-bold ${stressGtn > baseGtn ? 'text-red-600' : 'text-green-600'}`}>
+                  Stress: {stressGtn.toFixed(1)}%
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F — Net Price Recovery Simulator (Pharmacy Benefit)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function NetPriceRecoverySection() {
+  const store = useStore();
+  const { annualData, forecastYears } = useComputedData();
+  const [targetPbm, setTargetPbm] = useState(18);
+  const [targetPartD, setTargetPartD] = useState(15);
+  const [reduceSpec, setReduceSpec] = useState(1.0);
+  const [reducePap, setReducePap] = useState(2.5);
+  const [shiftPbmMix, setShiftPbmMix] = useState(30);
+
+  const baseAssumptions: BaseAssumptions = useMemo(() => ({
+    forecast: store.forecast, channelAllocations: store.channelAllocations,
+    discounts: store.discounts, rebates: store.rebates, otherRates: store.otherRates,
+    idnList: store.idnList, activeChannels: store.activeChannels,
+    referenceProduct: store.referenceProduct, iraConfig: store.iraConfig,
+  }), [store.forecast, store.channelAllocations, store.discounts, store.rebates, store.otherRates, store.idnList, store.activeChannels, store.referenceProduct, store.iraConfig]);
+
+  const rescueResult = useMemo(() => runRebateStressTest(baseAssumptions, {
+    pbmRebate: targetPbm, partDRebate: targetPartD, manMcaidRebate: store.rebates[0]?.manMcaid ?? 30,
+    specPharmFee: reduceSpec, papCost: reducePap, pbmMix: shiftPbmMix,
+  }), [baseAssumptions, targetPbm, targetPartD, reduceSpec, reducePap, shiftPbmMix, store.rebates]);
+
+  const chartData = forecastYears.map((yr, i) => {
+    const base = annualData[i];
+    const rescue = rescueResult.annual[i];
+    return {
+      year: yr,
+      'Baseline Net $/Unit': base ? (base.units > 0 ? base.netSales / base.units : 0) : 0,
+      'Rescue Net $/Unit': rescue ? (rescue.units > 0 ? rescue.netSales / rescue.units : 0) : 0,
+    };
+  });
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader>Net Price Recovery Simulator</SectionHeader>
+      <div className="border-2 border-green-300 rounded-xl p-4 bg-green-50/20">
+        <p className="text-xs text-[#44546A] mb-3">
+          Adjust rebate and fee targets to find the combination that improves net price per unit.
+        </p>
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.6fr] gap-6">
+          <div className="space-y-3">
+            <SliderRow label="Target PBM Rebate %" value={targetPbm} onChange={setTargetPbm} min={0} max={50} step={0.5} />
+            <SliderRow label="Target Part D Rebate %" value={targetPartD} onChange={setTargetPartD} min={0} max={40} step={0.5} />
+            <SliderRow label="Reduce Specialty Fee to %" value={reduceSpec} onChange={setReduceSpec} min={0} max={5} step={0.1} />
+            <SliderRow label="Reduce PAP Cost to %" value={reducePap} onChange={setReducePap} min={0} max={10} step={0.5} />
+            <SliderRow label="Shift PBM Mix to %" value={shiftPbmMix} onChange={setShiftPbmMix} min={10} max={60} />
+          </div>
+
+          <div className="bg-white rounded-xl border border-[#EAECEC] p-3">
+            <ResponsiveContainer width="100%" height={350}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
+                <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}`} tick={{ fontSize: 10 }} />
+                <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: number) => [fmtD(v)]} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Line dataKey="Baseline Net $/Unit" stroke="#9296B2" strokeWidth={2} strokeDasharray="5 3" dot={false} />
+                <Line dataKey="Rescue Net $/Unit" stroke="#4ade80" strokeWidth={2.5} dot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="flex gap-2 mt-4 flex-wrap">
+          {forecastYears.map((yr, i) => {
+            const base = annualData[i];
+            const rescue = rescueResult.annual[i];
+            const baseNet = base && base.units > 0 ? base.netSales / base.units : 0;
+            const rescueNet = rescue && rescue.units > 0 ? rescue.netSales / rescue.units : 0;
+            const delta = rescueNet - baseNet;
+            return (
+              <div key={yr} className="rounded-lg px-3 py-2 text-center border border-[#EAECEC] bg-white">
+                <div className="font-bold text-xs text-[#004567]">{yr}</div>
+                <div className="text-[10px] font-mono text-[#9296B2]">Base: {fmtD(baseNet)}</div>
+                <div className="text-[10px] font-mono font-bold text-[#004567]">Rescue: {fmtD(rescueNet)}</div>
+                <div className={`text-[10px] font-mono font-bold ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  Δ {fmtD(delta)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Main Export
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function SensitivityTab() {
+  const benefitType = useStore(s => s.benefitType);
+  const isBnB = benefitType === 'buy-and-bill';
+
   return (
     <div className="space-y-6">
       <TornadoSection />
       <TwoWaySection />
-      <StressTestSection />
-      <RescueSection />
+      {isBnB ? <StressTestSection /> : <RebateStressSection />}
+      {isBnB ? <RescueSection /> : <NetPriceRecoverySection />}
     </div>
   );
 }

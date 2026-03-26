@@ -1,7 +1,7 @@
 import { CHANNELS, ASP_ELIGIBLE, MONTHS, MONTH_PROFILES } from './constants';
 import type {
   ForecastRow, MonthlyRow, ASPRow, GTNRow, AnnualGTN,
-  DiscountRates, RebateRates, OtherRates,
+  DiscountRates, RebateRates, OtherRates, IRAConfig, IRAResult,
 } from '../types';
 
 export function getMonthlyWeights(profileName: string): number[] {
@@ -22,6 +22,7 @@ export function expandToMonthly(forecast: ForecastRow[]): MonthlyRow[] {
         period: `${row.year}-${MONTHS[m]}`,
         units: row.annualUnits * w[m],
         wac: row.wacPerUnit,
+        amp: row.ampPerUnit,
       });
     }
   }
@@ -41,21 +42,29 @@ export function computeASPSeries(
     const alloc = channelAllocByYear[yr] ?? channelAllocByYear[Math.min(...Object.keys(channelAllocByYear).map(Number))];
     const disc = discountByYear[yr] ?? discountByYear[Math.min(...Object.keys(discountByYear).map(Number))];
 
+    const amp = row.amp;
     const gpoP = wac * (1 - disc.gpo / 100);
     const idnP = wac * (1 - disc.idn / 100);
     const vaP = wac * (1 - disc.va / 100);
-    const b340P = wac * (1 - disc.b340 / 100);
+    // 340B ceiling price = AMP - URA; for biosimilars (351(k)): URA = AMP * 0.13
+    // Use the LOWER of AMP-based ceiling and WAC-based discount
+    const b340CeilingFromAMP = amp * 0.87;
+    const b340P = Math.min(b340CeilingFromAMP, wac * (1 - disc.b340 / 100));
 
+    // Selling prices per channel for ASP calculation (manufacturer transaction price)
     const chPrices: Record<string, number> = {
-      'Commercial PBM': wac,
-      'Commercial Medical': gpoP,
+      'Commercial PBM': wac,           // WAC invoiced; rebates are post-sale, excluded from ASP
+      'Commercial Medical': gpoP,      // GPO/contract price to provider
+      // Medicare Part B: provider purchases at GPO/IDN contract price; CMS reimburses provider at ASP+6%
+      // The ASP-relevant price is the manufacturer's transaction price to provider, approximated here as GPO price
       'Medicare Part B': gpoP,
-      'Medicare Part D': wac,
+      'Medicare Part D': wac,           // WAC invoiced; Part D rebates are post-sale
+      // Medicaid: invoiced at WAC; statutory rebates are post-sale and excluded from ASP selling price per 42 CFR 414.804(a)(3)
       'Medicaid FFS': wac,
       'Managed Medicaid': wac,
-      'GPO/IDN Non-340B': idnP,
-      'GPO/IDN 340B': b340P,
-      'VA/DoD/Federal': vaP,
+      'GPO/IDN Non-340B': idnP,        // IDN contract price
+      'GPO/IDN 340B': b340P,           // 340B ceiling price (excluded from ASP)
+      'VA/DoD/Federal': vaP,           // FSS price (excluded from ASP)
       'Cash/Uninsured': wac,
     };
 
@@ -107,7 +116,7 @@ export function computeGTN(
   channelAllocByYear: Record<number, Record<string, number>>,
   discountByYear: Record<number, { gpo: number; idn: number; b340: number; va: number }>,
   rebateByYear: Record<number, { comPbm: number; comMed: number; mcrD: number; mcaid: number; manMcaid: number }>,
-  otherByYear: Record<number, { adminFee: number; distFee: number; copay: number; returns: number }>,
+  otherByYear: Record<number, { adminFee: number; distFee: number; copay: number; returns: number; specialtyPharmFee: number; papCost: number }>,
 ): GTNRow[] {
   const aspLookup = new Map(aspData.map(r => [r.period, r.rollingASP6M]));
   const aspPlusLookup = new Map(aspData.map(r => [r.period, r.aspPlus6]));
@@ -123,20 +132,37 @@ export function computeGTN(
     const rebate = rebateByYear[yr] ?? rebateByYear[Math.min(...Object.keys(rebateByYear).map(Number))];
     const other = otherByYear[yr] ?? otherByYear[Math.min(...Object.keys(otherByYear).map(Number))];
 
+    const amp = row.amp;
+    const gpoP = wac * (1 - disc.gpo / 100);
     const idnP = wac * (1 - disc.idn / 100);
-    const b340P = wac * (1 - disc.b340 / 100);
     const vaP = wac * (1 - disc.va / 100);
+    // 340B ceiling: AMP-based for biosimilars (351(k)): URA = AMP * 0.13, ceiling = AMP * 0.87
+    const b340CeilingFromAMP = amp * 0.87;
+    const b340P = Math.min(b340CeilingFromAMP, wac * (1 - disc.b340 / 100));
 
     const grossSales = units * wac;
     const chU: Record<string, number> = {};
     for (const ch of CHANNELS) chU[ch] = units * (alloc[ch] ?? 0) / 100;
 
+    // Best Price: lowest non-exempt transaction price
+    const nonExemptPrices = [wac, gpoP, idnP].filter(p => p > 0);
+    const bestPrice = Math.min(...nonExemptPrices);
+
+    // Medicaid rebate floor enforcement:
+    // Statutory rebate = max(mcaid% of AMP, AMP - Best Price)
+    const statutoryRebatePct = rebate.mcaid / 100;
+    const ampBasedRebate = amp * statutoryRebatePct;
+    const bestPriceRebate = amp - bestPrice;
+    const effectiveMcaidRebatePerUnit = Math.max(ampBasedRebate, bestPriceRebate);
+
     // Rebates
     const rebComPBM = chU['Commercial PBM'] * wac * (rebate.comPbm / 100);
     const rebComMed = chU['Commercial Medical'] * wac * (rebate.comMed / 100);
     const rebMcrD = chU['Medicare Part D'] * wac * (rebate.mcrD / 100);
-    const rebMcaid = chU['Medicaid FFS'] * wac * (rebate.mcaid / 100);
-    const rebManMcaid = chU['Managed Medicaid'] * wac * (rebate.manMcaid / 100);
+    // Medicaid: use effective rebate (max of statutory floor vs Best Price-driven)
+    const rebMcaid = chU['Medicaid FFS'] * effectiveMcaidRebatePerUnit;
+    // Managed Medicaid: supplemental rebate ~15% above statutory floor
+    const rebManMcaid = chU['Managed Medicaid'] * effectiveMcaidRebatePerUnit * 1.15;
     const totalRebates = rebComPBM + rebComMed + rebMcrD + rebMcaid + rebManMcaid;
 
     // Chargebacks
@@ -150,7 +176,9 @@ export function computeGTN(
     const distFee = grossSales * (other.distFee / 100);
     const copay = grossSales * (other.copay / 100);
     const returns = grossSales * (other.returns / 100);
-    const totalOther = adminFee + distFee + copay + returns;
+    const specialtyPharmFee = grossSales * ((other.specialtyPharmFee ?? 0) / 100);
+    const papCost = grossSales * ((other.papCost ?? 0) / 100);
+    const totalOther = adminFee + distFee + copay + returns + specialtyPharmFee + papCost;
 
     const totalDeductions = totalRebates + totalChargebacks + totalOther;
     const netSales = grossSales - totalDeductions;
@@ -163,7 +191,7 @@ export function computeGTN(
       units, wac, grossSales,
       rebComPBM, rebComMed, rebMcrD, rebMcaid, rebManMcaid, totalRebates,
       cbGPO, cb340B, cbVA, totalChargebacks,
-      adminFee, distFee, copay, returns, totalOther,
+      adminFee, distFee, copay, returns, specialtyPharmFee, papCost, totalOther,
       totalDeductions, netSales,
       asp: aspVal, aspPlus6: asp6Val,
       idnPrice: idnP, b340Price: b340P,
@@ -171,6 +199,8 @@ export function computeGTN(
       b340BelowASP: aspVal < b340P,
       idnSpread: asp6Val - idnP,
       gtnPct: grossSales > 0 ? (totalDeductions / grossSales) * 100 : 0,
+      bestPrice,
+      effectiveMcaidRebate: effectiveMcaidRebatePerUnit,
     });
   }
   return rows;
@@ -198,9 +228,62 @@ export function annualRollup(gtnRows: GTNRow[]): AnnualGTN[] {
       totalDeductions, netSales, units, gtnPct,
       netPrice: units > 0 ? netSales / units : 0,
       netPct: grossSales > 0 ? (netSales / grossSales) * 100 : 0,
+      iraRebate: 0,
+      totalDeductionsWithIRA: totalDeductions,
+      netSalesAfterIRA: netSales,
     });
   }
   return result.sort((a, b) => a.year - b.year);
+}
+
+// ── IRA Inflation Rebate ─────────────────────────────────────────────────
+
+export function computeIRARebate(
+  gtnRows: GTNRow[],
+  aspData: ASPRow[],
+  iraConfig: IRAConfig,
+  channelAllocByYear: Record<number, Record<string, number>>,
+): IRAResult[] {
+  if (!iraConfig.enabled || iraConfig.baselineASP <= 0) return [];
+
+  const years = [...new Set(gtnRows.map(r => r.year))].sort();
+  const results: IRAResult[] = [];
+
+  for (const year of years) {
+    const yearsFromBaseline = year - iraConfig.baselineYear;
+    if (yearsFromBaseline <= 0) {
+      results.push({ year, iraRebate: 0, inflationAllowedASP: iraConfig.baselineASP, actualASP: iraConfig.baselineASP, excessPerUnit: 0 });
+      continue;
+    }
+
+    const inflationAllowedASP = iraConfig.baselineASP * Math.pow(1 + iraConfig.annualCPIU / 100, yearsFromBaseline);
+    const yearASP = aspData.filter(a => a.year === year);
+    const actualASP = yearASP.length > 0 ? yearASP.reduce((s, a) => s + a.rollingASP6M, 0) / yearASP.length : 0;
+    const excessPerUnit = Math.max(0, actualASP - inflationAllowedASP);
+
+    const alloc = channelAllocByYear[year] ?? {};
+    const partBPct = (alloc['Medicare Part B'] ?? 0) / 100;
+    const yearGTN = gtnRows.filter(r => r.year === year);
+    const totalUnits = yearGTN.reduce((s, r) => s + r.units, 0);
+    const partBUnits = totalUnits * partBPct;
+    const iraRebate = excessPerUnit * partBUnits;
+
+    results.push({ year, iraRebate, inflationAllowedASP, actualASP, excessPerUnit });
+  }
+  return results;
+}
+
+export function applyIRAToAnnual(annual: AnnualGTN[], iraResults: IRAResult[]): AnnualGTN[] {
+  const iraMap = new Map(iraResults.map(r => [r.year, r.iraRebate]));
+  return annual.map(a => {
+    const ira = iraMap.get(a.year) ?? 0;
+    return {
+      ...a,
+      iraRebate: ira,
+      totalDeductionsWithIRA: a.totalDeductions + ira,
+      netSalesAfterIRA: a.netSales - ira,
+    };
+  });
 }
 
 // Formatting helpers

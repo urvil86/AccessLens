@@ -16,8 +16,8 @@ export const ASP_ELIGIBLE: Record<string, boolean> = {
   'Commercial Medical': true,
   'Medicare Part B': true,
   'Medicare Part D': true,
-  'Medicaid FFS': false,
-  'Managed Medicaid': false,
+  'Medicaid FFS': true,      // Included in ASP per 42 CFR 414.804; statutory rebates are post-sale
+  'Managed Medicaid': true,  // Included in ASP; supplemental rebates are post-sale
   'GPO/IDN Non-340B': true,
   'GPO/IDN 340B': false,
   'VA/DoD/Federal': false,
@@ -92,4 +92,41 @@ export const DEFAULT_CHANNEL_ALLOC: Record<string, number> = {
 };
 
 export const THERAPY_AREAS = ['Oncology','Rare Disease','Immunology','Cardiovascular','Neurology','Other'];
-export const ADMIN_ROUTES = ['IV Infusion (Buy & Bill)','SC Injection','Oral','IM Injection'];
+
+// ── Benefit Type Architecture ────────────────────────────────────────────
+
+import type { BenefitType } from '../types';
+
+export const BENEFIT_TYPES: { id: BenefitType; label: string; description: string }[] = [
+  { id: 'buy-and-bill', label: 'Buy & Bill (Physician-Administered)', description: 'IV/IM infusion products: provider purchases drug, bills payer. Key channels: Medicare Part B, GPO/IDN, Commercial Medical. Chargeback-driven GTN.' },
+  { id: 'pharmacy-benefit', label: 'Pharmacy Benefit (Self-Administered)', description: 'SC injection or oral products dispensed through pharmacies. Key channels: Commercial PBM, Medicare Part D, specialty pharmacy. Rebate-driven GTN.' },
+];
+
+export const BNB_CHANNEL_ALLOC: Record<string, number> = {
+  'Commercial PBM': 0,
+  'Commercial Medical': 28,
+  'Medicare Part B': 25,
+  'Medicare Part D': 0,
+  'Medicaid FFS': 8,
+  'Managed Medicaid': 7,
+  'GPO/IDN Non-340B': 18,
+  'GPO/IDN 340B': 8,
+  'VA/DoD/Federal': 4,
+  'Cash/Uninsured': 2,
+};
+
+export const PBX_CHANNEL_ALLOC: Record<string, number> = {
+  'Commercial PBM': 35,
+  'Commercial Medical': 5,
+  'Medicare Part B': 0,
+  'Medicare Part D': 22,
+  'Medicaid FFS': 10,
+  'Managed Medicaid': 10,
+  'GPO/IDN Non-340B': 5,
+  'GPO/IDN 340B': 3,
+  'VA/DoD/Federal': 5,
+  'Cash/Uninsured': 5,
+};
+
+export const BNB_REBATE_DEFAULTS = { comPbm: 0, comMed: 12, mcrD: 0, mcaid: 23.1, manMcaid: 28 };
+export const PBX_REBATE_DEFAULTS = { comPbm: 22, comMed: 5, mcrD: 20, mcaid: 23.1, manMcaid: 30 };

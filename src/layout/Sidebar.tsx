@@ -1,12 +1,12 @@
 import { useStore } from '../store/useStore';
-import { THERAPY_AREAS, ADMIN_ROUTES } from '../engine/constants';
+import { THERAPY_AREAS, BENEFIT_TYPES } from '../engine/constants';
 import chryselysLogo from '../assets/chryselys-logo.svg';
 
 export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
   const {
     productName, setProductName,
     therapyArea, setTherapyArea,
-    adminRoute, setAdminRoute,
+    benefitType, setBenefitType,
     nYears, setNYears,
     startYear, setStartYear,
     forecast,
@@ -72,14 +72,21 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
         {THERAPY_AREAS.map(t => <option key={t}>{t}</option>)}
       </select>
 
-      <label className="text-xs font-semibold text-[#C6B78A] uppercase tracking-wider">Administration</label>
+      <label className="text-xs font-semibold text-[#C6B78A] uppercase tracking-wider">Benefit Type</label>
       <select
-        value={adminRoute}
-        onChange={e => setAdminRoute(e.target.value)}
+        value={benefitType}
+        onChange={e => {
+          if (confirm('Changing benefit type will reset channel allocations and rebate defaults. Continue?')) {
+            setBenefitType(e.target.value as 'buy-and-bill' | 'pharmacy-benefit');
+          }
+        }}
         className="px-2 py-1.5 border border-[#5C6082] rounded text-sm bg-[#004466] text-white focus:border-[#C98B27] outline-none"
       >
-        {ADMIN_ROUTES.map(r => <option key={r}>{r}</option>)}
+        {BENEFIT_TYPES.map(bt => <option key={bt.id} value={bt.id}>{bt.label}</option>)}
       </select>
+      <p className="text-[9px] text-[#9296B2] leading-tight">
+        {BENEFIT_TYPES.find(bt => bt.id === benefitType)?.description}
+      </p>
 
       <hr className="border-[#5C6082]" />
       <div className="text-sm font-bold text-[#C98B27]">Forecast Horizon</div>

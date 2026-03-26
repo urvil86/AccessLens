@@ -4,6 +4,7 @@ import { Accordion } from '../../shared/Accordion';
 import { EditableGrid } from '../../shared/EditableGrid';
 import { MONTH_PROFILES, CHANNELS, COLORS_MAIN } from '../../engine/constants';
 import { fmtU, fmtD, fmtM } from '../../engine/compute';
+import { useComputedData } from '../../engine/hooks';
 import { generateTemplate, parseUpload, exportAssumptions, triggerDownload, type ParsedData } from '../../engine/excelIO';
 import {
   ComposedChart, Bar, Line, AreaChart, Area,
@@ -15,21 +16,28 @@ import {
 function VolumeForecastSection() {
   const forecast = useStore(s => s.forecast);
   const updateForecastRow = useStore(s => s.updateForecastRow);
+  const adoptionConfig = useStore(s => s.adoptionConfig);
+  const setAdoptionConfig = useStore(s => s.setAdoptionConfig);
+  const rp = useStore(s => s.referenceProduct);
+  const { adoptionDetail, effectiveForecast } = useComputedData();
   const [showQuickFill, setShowQuickFill] = useState(false);
   const [wacEsc, setWacEsc] = useState(3);
   const [unitEsc, setUnitEsc] = useState(0);
+  const [autoAMP, setAutoAMP] = useState(true);
 
   const columns = forecast.map(f => ({ key: String(f.year), label: String(f.year) }));
   const rows = [
     { key: 'units', label: 'Annual Units ⓘ', title: 'Total units projected for this year across all channels' },
     { key: 'wac', label: 'WAC $/Unit ⓘ', title: 'Wholesale Acquisition Cost — list price before any discounts or rebates' },
+    { key: 'amp', label: 'AMP $/Unit ⓘ', title: 'Average Manufacturer Price — typically 80-90% of WAC. Used for 340B ceiling and Medicaid rebate calculations.' },
   ];
 
   const gridData = useMemo(() => {
-    const d: Record<string, Record<string, number>> = { units: {}, wac: {} };
+    const d: Record<string, Record<string, number>> = { units: {}, wac: {}, amp: {} };
     for (const f of forecast) {
       d.units[String(f.year)] = f.annualUnits;
       d.wac[String(f.year)] = f.wacPerUnit;
+      d.amp[String(f.year)] = f.ampPerUnit;
     }
     return d;
   }, [forecast]);
@@ -38,8 +46,13 @@ function VolumeForecastSection() {
     const idx = forecast.findIndex(f => String(f.year) === colKey);
     if (idx < 0) return;
     if (rowKey === 'units') updateForecastRow(idx, { annualUnits: Math.round(value) });
-    else if (rowKey === 'wac') updateForecastRow(idx, { wacPerUnit: value });
-  }, [forecast, updateForecastRow]);
+    else if (rowKey === 'wac') {
+      const updates: Partial<import('../../types').ForecastRow> = { wacPerUnit: value };
+      if (autoAMP) updates.ampPerUnit = Math.round(value * 0.85 * 100) / 100;
+      updateForecastRow(idx, updates);
+    }
+    else if (rowKey === 'amp') updateForecastRow(idx, { ampPerUnit: value });
+  }, [forecast, updateForecastRow, autoAMP]);
 
   const handleProfileChange = useCallback((idx: number, profile: string) => {
     updateForecastRow(idx, { monthlyProfile: profile });
@@ -50,9 +63,11 @@ function VolumeForecastSection() {
     const baseUnits = forecast[0].annualUnits;
     const baseWac = forecast[0].wacPerUnit;
     for (let i = 1; i < forecast.length; i++) {
+      const wac = Math.round(baseWac * Math.pow(1 + wacEsc / 100, i) * 100) / 100;
       updateForecastRow(i, {
         annualUnits: Math.round(baseUnits * Math.pow(1 + unitEsc / 100, i)),
-        wacPerUnit: Math.round(baseWac * Math.pow(1 + wacEsc / 100, i) * 100) / 100,
+        wacPerUnit: wac,
+        ampPerUnit: Math.round(wac * 0.85 * 100) / 100,
       });
     }
     setShowQuickFill(false);
@@ -66,8 +81,114 @@ function VolumeForecastSection() {
 
   const profileOptions = Object.keys(MONTH_PROFILES);
 
+  const isAdoption = adoptionConfig.enabled && adoptionConfig.mode === 'adoption-curve';
+
+  // Adoption chart data
+  const adoptionChartData = useMemo(() => {
+    if (!isAdoption || !effectiveForecast) return [];
+    return effectiveForecast.map((f, i) => ({
+      year: f.year,
+      'Biosimilar Units': f.annualUnits,
+      'RP Market': rp.totalMarketUnits[i] ?? 0,
+      'Share %': rp.totalMarketUnits[i] > 0 ? (f.annualUnits / rp.totalMarketUnits[i]) * 100 : 0,
+    }));
+  }, [isAdoption, effectiveForecast, rp]);
+
   return (
     <div className="space-y-4">
+      {/* Volume source toggle */}
+      <div className="flex items-center gap-4 mb-2">
+        <span className="text-xs font-semibold text-[#44546A]">Volume Source:</span>
+        <div className="flex gap-1 bg-[#EAECEC] rounded-lg p-0.5">
+          <button onClick={() => setAdoptionConfig({ enabled: false, mode: 'manual' })}
+            className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${!isAdoption ? 'bg-[#004567] text-white shadow' : 'text-[#44546A] hover:bg-white'}`}>
+            Manual Entry
+          </button>
+          <button onClick={() => setAdoptionConfig({ enabled: true, mode: 'adoption-curve' })}
+            className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${isAdoption ? 'bg-[#004567] text-white shadow' : 'text-[#44546A] hover:bg-white'}`}>
+            Adoption Model
+          </button>
+        </div>
+      </div>
+
+      {/* Adoption model controls */}
+      {isAdoption && (
+        <div className="bg-[#FFF9EE] border border-[#C98B27] rounded-lg p-4 space-y-3">
+          <div className="text-xs font-bold text-[#004567] mb-2">Adoption Parameters</div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-[10px] font-semibold text-[#44546A] block mb-1">Launch Month</label>
+              <select value={adoptionConfig.launchMonth} onChange={e => setAdoptionConfig({ launchMonth: Number(e.target.value) })}
+                className="w-full px-2 py-1 border border-[#EAECEC] rounded text-xs font-mono focus:ring-1 focus:ring-[#C98B27] outline-none">
+                {Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i]}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-semibold text-[#44546A] block mb-1">Peak Market Share: {adoptionConfig.peakSharePct}%</label>
+              <input type="range" min={5} max={80} value={adoptionConfig.peakSharePct} onChange={e => setAdoptionConfig({ peakSharePct: Number(e.target.value) })} />
+            </div>
+            <div>
+              <label className="text-[10px] font-semibold text-[#44546A] block mb-1">Switch Rate/Month: {adoptionConfig.switchRatePctPerMonth}%</label>
+              <input type="range" min={0.5} max={10} step={0.5} value={adoptionConfig.switchRatePctPerMonth} onChange={e => setAdoptionConfig({ switchRatePctPerMonth: Number(e.target.value) })} />
+            </div>
+            <div>
+              <label className="text-[10px] font-semibold text-[#44546A] block mb-1">New Patient Capture: {adoptionConfig.newPatientCapturePct}%</label>
+              <input type="range" min={0} max={100} value={adoptionConfig.newPatientCapturePct} onChange={e => setAdoptionConfig({ newPatientCapturePct: Number(e.target.value) })} />
+            </div>
+            <div>
+              <label className="text-[10px] font-semibold text-[#44546A] block mb-1">Interchangeable Uplift: {adoptionConfig.interchangeableUplift}x</label>
+              <input type="range" min={1} max={5} step={0.5} value={adoptionConfig.interchangeableUplift} onChange={e => setAdoptionConfig({ interchangeableUplift: Number(e.target.value) })} />
+              <span className="text-[9px] text-[#9296B2]">{rp.isInterchangeable ? '(Active — product is interchangeable)' : '(Inactive — not interchangeable)'}</span>
+            </div>
+          </div>
+
+          {/* Adoption projection chart */}
+          {adoptionChartData.length > 0 && (
+            <div className="bg-white rounded-lg border border-[#EAECEC] p-3 mt-3">
+              <div className="text-[10px] font-bold text-[#004567] mb-1">Projected Biosimilar Volume vs RP Market</div>
+              <ResponsiveContainer width="100%" height={180}>
+                <ComposedChart data={adoptionChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
+                  <XAxis dataKey="year" tick={{ fontSize: 10, fill: '#44546A' }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 9, fill: '#44546A' }} label={{ value: 'Units', angle: -90, position: 'insideLeft', style: { fontSize: 9, fill: '#9296B2' } }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: '#44546A' }} domain={[0, 100]} label={{ value: 'Share %', angle: 90, position: 'insideRight', style: { fontSize: 9, fill: '#9296B2' } }} />
+                  <Tooltip contentStyle={{ fontSize: 10 }} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Bar yAxisId="left" dataKey="RP Market" fill="#f87171" opacity={0.3} />
+                  <Bar yAxisId="left" dataKey="Biosimilar Units" fill="#5B9BD5" opacity={0.7} />
+                  <Line yAxisId="right" dataKey="Share %" stroke="#C98B27" strokeWidth={2} dot={{ r: 3 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Computed volumes read-only table */}
+          <div className="overflow-auto rounded-lg border border-[#EAECEC]">
+            <table className="w-full text-xs border-collapse">
+              <thead><tr className="bg-[#004567] text-white">
+                <th className="px-3 py-1.5 text-left">Metric</th>
+                {forecast.map(f => <th key={f.year} className="px-3 py-1.5 text-center">{f.year}</th>)}
+              </tr></thead>
+              <tbody>
+                <tr className="bg-white">
+                  <td className="px-3 py-1 font-semibold text-[#004567]">Computed Units</td>
+                  {effectiveForecast.map((f, i) => <td key={i} className="px-3 py-1 text-center font-mono">{fmtU(f.annualUnits)}</td>)}
+                </tr>
+                <tr className="bg-[#EAECEC]/40">
+                  <td className="px-3 py-1 font-semibold text-[#004567]">RP Market Share %</td>
+                  {effectiveForecast.map((f, i) => {
+                    const rpM = rp.totalMarketUnits[i] ?? 1;
+                    return <td key={i} className="px-3 py-1 text-center font-mono">{rpM > 0 ? ((f.annualUnits / rpM) * 100).toFixed(1) : '0'}%</td>;
+                  })}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Manual mode controls */}
+      {!isAdoption && (<>
       <div className="flex items-center gap-3 mb-2">
         <button
           onClick={() => setShowQuickFill(!showQuickFill)}
@@ -105,6 +226,10 @@ function VolumeForecastSection() {
             </button>
           </div>
         )}
+        <label className="flex items-center gap-1.5 text-xs text-[#44546A] cursor-pointer ml-auto">
+          <input type="checkbox" checked={autoAMP} onChange={e => setAutoAMP(e.target.checked)} className="accent-[#004567]" />
+          Auto-calculate AMP (85% of WAC)
+        </label>
       </div>
 
       <EditableGrid
@@ -142,6 +267,7 @@ function VolumeForecastSection() {
           </tbody>
         </table>
       </div>
+      </>)}
 
       {/* Compact chart */}
       <div className="bg-white rounded-lg border border-[#EAECEC] p-3">
@@ -336,6 +462,8 @@ function ContractTermsSection() {
     { key: 'distFee', label: 'Dist Fee %', title: 'Wholesaler/distributor service fees' },
     { key: 'copay', label: 'Copay Support %', title: 'Manufacturer copay assistance program costs' },
     { key: 'returns', label: 'Returns %', title: 'Product returns and credits as % of gross' },
+    { key: 'specialtyPharmFee', label: 'Specialty Pharm %', title: 'Specialty pharmacy handling, data management, and patient services fees' },
+    { key: 'papCost', label: 'PAP / Copay Assist %', title: 'Patient Assistance Program costs — copay cards, free goods, financial assistance' },
   ];
   const feeData = useMemo(() => {
     const d: Record<string, Record<string, number>> = {};
@@ -345,13 +473,15 @@ function ContractTermsSection() {
       d.distFee[String(o.year)] = o.distFee;
       d.copay[String(o.year)] = o.copay;
       d.returns[String(o.year)] = o.returns;
+      d.specialtyPharmFee[String(o.year)] = o.specialtyPharmFee ?? 0;
+      d.papCost[String(o.year)] = o.papCost ?? 0;
     }
     return d;
   }, [otherRates]);
 
   type DiscField = 'gpo' | 'idn' | 'b340' | 'va';
   type RebField = 'comPbm' | 'comMed' | 'mcrD' | 'mcaid' | 'manMcaid';
-  type FeeField = 'adminFee' | 'distFee' | 'copay' | 'returns';
+  type FeeField = 'adminFee' | 'distFee' | 'copay' | 'returns' | 'specialtyPharmFee' | 'papCost';
 
   const handleDiscChange = useCallback((rowKey: string, colKey: string, value: number) => {
     const idx = discounts.findIndex(d => String(d.year) === colKey);
@@ -387,7 +517,7 @@ function ContractTermsSection() {
         + (alloc['GPO/IDN 340B'] ?? 0) * disc.b340
         + (alloc['VA/DoD/Federal'] ?? 0) * disc.va) / 100;
 
-      const o = oth.adminFee + oth.distFee + oth.copay + oth.returns;
+      const o = oth.adminFee + oth.distFee + oth.copay + oth.returns + (oth.specialtyPharmFee ?? 0) + (oth.papCost ?? 0);
       return { year: f.year, rebates: r, chargebacks: c, other: o, total: r + c + o };
     });
   }, [forecast, channelAllocations, rebates, discounts, otherRates]);
@@ -469,6 +599,159 @@ function ContractTermsSection() {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+    </div>
+  );
+}
+
+// ─── Section 0: Reference Product ──────────────────────────────────────────
+
+function ReferenceProductSection() {
+  const forecast = useStore(s => s.forecast);
+  const rp = useStore(s => s.referenceProduct);
+  const setRP = useStore(s => s.setReferenceProduct);
+
+  const columns = forecast.map(f => ({ key: String(f.year), label: String(f.year) }));
+  const rows = [
+    { key: 'rpWac', label: 'RP WAC $/Unit', title: 'Reference product WAC — the branded originator price' },
+    { key: 'marketUnits', label: 'Total Market Units', title: 'Total market size (reference + all biosimilars combined)' },
+  ];
+
+  const gridData = useMemo(() => {
+    const d: Record<string, Record<string, number>> = { rpWac: {}, marketUnits: {} };
+    for (let i = 0; i < forecast.length; i++) {
+      const yr = String(forecast[i].year);
+      d.rpWac[yr] = rp.wacPerUnit[i] ?? 3000;
+      d.marketUnits[yr] = rp.totalMarketUnits[i] ?? 200000;
+    }
+    return d;
+  }, [forecast, rp]);
+
+  const handleChange = useCallback((rowKey: string, colKey: string, value: number) => {
+    const idx = forecast.findIndex(f => String(f.year) === colKey);
+    if (idx < 0) return;
+    if (rowKey === 'rpWac') {
+      const wacs = [...rp.wacPerUnit]; wacs[idx] = value;
+      setRP({ wacPerUnit: wacs });
+    } else if (rowKey === 'marketUnits') {
+      const units = [...rp.totalMarketUnits]; units[idx] = Math.round(value);
+      setRP({ totalMarketUnits: units });
+    }
+  }, [forecast, rp, setRP]);
+
+  // Computed discount to RP
+  const discounts = forecast.map((f, i) => {
+    const rpW = rp.wacPerUnit[i] ?? 1;
+    return rpW > 0 ? ((1 - f.wacPerUnit / rpW) * 100) : 0;
+  });
+
+  const chartData = forecast.map((f, i) => ({
+    year: f.year,
+    'Biosimilar WAC': f.wacPerUnit,
+    'RP WAC': rp.wacPerUnit[i] ?? 0,
+    'Discount %': Math.round(discounts[i] * 10) / 10,
+  }));
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+        <div>
+          <label className="text-xs font-semibold text-[#44546A] block mb-1">Reference Product Name</label>
+          <input type="text" value={rp.name} onChange={e => setRP({ name: e.target.value })}
+            className="w-full px-2 py-1.5 border border-[#EAECEC] rounded text-sm text-[#004567] font-semibold focus:ring-1 focus:ring-[#C98B27] outline-none" />
+        </div>
+        <div className="flex items-end">
+          <label className="flex items-center gap-2 text-sm text-[#004567] cursor-pointer">
+            <input type="checkbox" checked={rp.isInterchangeable} onChange={e => setRP({ isInterchangeable: e.target.checked })}
+              className="accent-[#004567] w-4 h-4" />
+            <span className="font-semibold">Interchangeable Designation</span>
+          </label>
+          <span className="ml-2 text-[9px] text-[#9296B2]" title="Interchangeable = automatic pharmacy substitution allowed. Dramatically increases PBM uptake.">ⓘ</span>
+        </div>
+      </div>
+
+      <EditableGrid columns={columns} rows={rows} data={gridData} onChange={handleChange} decimalPlaces={0}
+        formatValue={(v) => v >= 10000 ? fmtU(v) : fmtD(v)} />
+
+      {/* Computed discount row */}
+      <div className="overflow-auto rounded-lg border border-[#EAECEC]">
+        <table className="w-full border-collapse text-sm">
+          <tbody>
+            <tr className="bg-[#FFF9EE]">
+              <td className="bg-[#FFF9EE] font-semibold text-[#C98B27] text-xs px-4 py-2 border-r border-[#EAECEC] whitespace-nowrap min-w-[180px]">
+                Discount to RP %
+              </td>
+              {discounts.map((d, i) => (
+                <td key={i} className="px-1 py-2 text-center font-mono text-xs font-bold text-[#004567] border-r border-[#EAECEC] last:border-r-0 min-w-[90px]">
+                  {d.toFixed(1)}%
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* RP vs Biosimilar WAC chart */}
+      <div className="bg-white rounded-lg border border-[#EAECEC] p-3">
+        <ResponsiveContainer width="100%" height={180}>
+          <ComposedChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
+            <XAxis dataKey="year" tick={{ fontSize: 11, fill: '#44546A' }} />
+            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#44546A' }} label={{ value: '$/Unit', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#9296B2' } }} />
+            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#44546A' }} label={{ value: 'Discount %', angle: 90, position: 'insideRight', style: { fontSize: 10, fill: '#9296B2' } }} />
+            <Tooltip contentStyle={{ fontSize: 11 }} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line yAxisId="left" dataKey="RP WAC" stroke="#f87171" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3 }} />
+            <Line yAxisId="left" dataKey="Biosimilar WAC" stroke="#5B9BD5" strokeWidth={2} dot={{ r: 3 }} />
+            <Bar yAxisId="right" dataKey="Discount %" fill="#C98B27" opacity={0.4} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// ─── Section 4: IRA Config ─────────────────────────────────────────────────
+
+function IRAConfigSection() {
+  const iraConfig = useStore(s => s.iraConfig);
+  const setIRAConfig = useStore(s => s.setIRAConfig);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-[#FFF9EE] border-l-4 border-[#C98B27] rounded-lg px-4 py-3 text-sm text-[#004567] leading-relaxed">
+        <strong>Inflation Reduction Act:</strong> If your drug's ASP exceeds the inflation-adjusted baseline,
+        you owe CMS the excess on every Medicare Part B unit. This primarily affects Buy &amp; Bill products.
+      </div>
+
+      <label className="flex items-center gap-2 text-sm text-[#004567] font-semibold cursor-pointer">
+        <input type="checkbox" checked={iraConfig.enabled} onChange={e => setIRAConfig({ enabled: e.target.checked })}
+          className="accent-[#004567] w-4 h-4" />
+        Enable IRA Inflation Rebate Modeling
+      </label>
+
+      {iraConfig.enabled && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="text-xs font-semibold text-[#44546A] block mb-1">Baseline ASP ($/unit)</label>
+            <input type="number" value={iraConfig.baselineASP || ''} placeholder="Auto from Year 1"
+              onChange={e => setIRAConfig({ baselineASP: Number(e.target.value) || 0 })}
+              className="w-full px-2 py-1.5 border border-[#EAECEC] rounded text-sm font-mono text-[#004567] focus:ring-1 focus:ring-[#C98B27] outline-none" />
+            <p className="text-[9px] text-[#9296B2] mt-1">Leave blank to auto-populate from Year 1 computed ASP</p>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-[#44546A] block mb-1">Baseline Year</label>
+            <input type="number" value={iraConfig.baselineYear}
+              onChange={e => setIRAConfig({ baselineYear: Number(e.target.value) })}
+              className="w-full px-2 py-1.5 border border-[#EAECEC] rounded text-sm font-mono text-[#004567] focus:ring-1 focus:ring-[#C98B27] outline-none" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-[#44546A] block mb-1">Annual CPI-U (%)</label>
+            <input type="number" value={iraConfig.annualCPIU} step={0.1}
+              onChange={e => setIRAConfig({ annualCPIU: Number(e.target.value) })}
+              className="w-full px-2 py-1.5 border border-[#EAECEC] rounded text-sm font-mono text-[#004567] focus:ring-1 focus:ring-[#C98B27] outline-none" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -647,12 +930,12 @@ export function AssumptionsPage() {
   const contractSummary = 'Discounts, rebates & fees by year';
 
   const handleDownloadTemplate = () => {
-    const data = generateTemplate(forecast, channelAllocations, discounts, rebates, otherRates, activeChannels);
+    const data = generateTemplate(forecast, channelAllocations, discounts, rebates, otherRates, activeChannels, store.referenceProduct);
     triggerDownload(data, 'AccessLens_Template.xlsx');
   };
 
   const handleExportCurrent = () => {
-    const data = exportAssumptions(forecast, channelAllocations, discounts, rebates, otherRates, activeChannels);
+    const data = exportAssumptions(forecast, channelAllocations, discounts, rebates, otherRates, activeChannels, store.referenceProduct);
     triggerDownload(data, `AccessLens_Assumptions_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
@@ -741,6 +1024,10 @@ export function AssumptionsPage() {
         />
       )}
 
+      <Accordion title="Reference Product & Competitive Positioning" summary={`${store.referenceProduct.name}${store.referenceProduct.isInterchangeable ? ' (Interchangeable)' : ''}`}>
+        <ReferenceProductSection />
+      </Accordion>
+
       <Accordion title="Volume & WAC Forecast" summary={volumeSummary} defaultOpen={true}>
         <VolumeForecastSection />
       </Accordion>
@@ -751,6 +1038,10 @@ export function AssumptionsPage() {
 
       <Accordion title="Contract Terms" summary={contractSummary}>
         <ContractTermsSection />
+      </Accordion>
+
+      <Accordion title="IRA / Inflation Rebate Settings" summary={store.iraConfig.enabled ? `CPI-U ${store.iraConfig.annualCPIU}% — active` : 'Disabled'}>
+        <IRAConfigSection />
       </Accordion>
 
       <ModelHealthStrip />

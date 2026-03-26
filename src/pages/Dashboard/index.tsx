@@ -14,14 +14,17 @@ import {
 const PIE_COLORS = ['#5B9BD5', '#C98B27', '#004567', '#9296B2', '#5C6082', '#C6B78A', '#44546A', '#4ade80', '#f87171', '#E8E1CE'];
 
 export function DashboardTab() {
-  const { annualData, forecastYears } = useComputedData();
+  const { annualData, aspData, forecastYears } = useComputedData();
+  const idnList = useStore(s => s.idnList);
+  const rebates = useStore(s => s.rebates);
   const productName = useStore(s => s.productName);
   const therapyArea = useStore(s => s.therapyArea);
-  const adminRoute = useStore(s => s.adminRoute);
+  const benefitType = useStore(s => s.benefitType);
   const setActiveTab = useStore(s => s.setActiveTab);
   const forecast = useStore(s => s.forecast);
   const channelAllocations = useStore(s => s.channelAllocations);
   const activeChannels = useStore(s => s.activeChannels);
+  const rp = useStore(s => s.referenceProduct);
 
   const [chartView, setChartView] = useState<'waterfall' | 'trend' | 'channel'>('waterfall');
   const [pieYear, setPieYear] = useState(0); // index into forecastYears
@@ -33,6 +36,44 @@ export function DashboardTab() {
   const peakYear = annualData.length > 0
     ? annualData.reduce((best, d) => (d.netSales > best.netSales ? d : best), annualData[0])
     : null;
+
+  // Avg discount to RP
+  const avgRPDiscount = useMemo(() => {
+    if (forecast.length === 0) return 0;
+    const discounts = forecast.map((f, i) => {
+      const rpW = rp.wacPerUnit[i] ?? 1;
+      return rpW > 0 ? (1 - f.wacPerUnit / rpW) * 100 : 0;
+    });
+    return discounts.reduce((s, d) => s + d, 0) / discounts.length;
+  }, [forecast, rp]);
+
+  const isBnB = benefitType === 'buy-and-bill';
+
+  // B&B: Avg provider spread (ASP+6% minus avg IDN acquisition)
+  const avgProviderSpread = useMemo(() => {
+    if (!isBnB || aspData.length === 0 || idnList.length === 0) return 0;
+    const avgASP6 = aspData.reduce((s, a) => s + a.aspPlus6, 0) / aspData.length;
+    const avgIdnAcq = idnList.reduce((s, idn) => {
+      const avgWac = forecast.reduce((ws, f) => ws + f.wacPerUnit, 0) / (forecast.length || 1);
+      return s + avgWac * (1 - idn.discount / 100) * (idn.volumePct / 100);
+    }, 0);
+    return avgASP6 - avgIdnAcq;
+  }, [isBnB, aspData, idnList, forecast]);
+
+  // Pharmacy: Avg rebate depth for formulary position
+  const avgPBMRebate = useMemo(() => {
+    if (isBnB || rebates.length === 0) return 0;
+    return rebates.reduce((s, r) => s + r.comPbm, 0) / rebates.length;
+  }, [isBnB, rebates]);
+
+  const formularyPosition = avgPBMRebate > 25 ? 'Preferred' : avgPBMRebate >= 15 ? 'Non-Preferred' : 'Non-Formulary';
+  const formularyColor = avgPBMRebate > 25 ? 'border-green-300' : avgPBMRebate >= 15 ? 'border-amber-300' : 'border-red-300';
+
+  // Avg net price per unit
+  const avgNetPrice = useMemo(() => {
+    const totalUnits = annualData.reduce((s, d) => s + d.units, 0);
+    return totalUnits > 0 ? totalNet / totalUnits : 0;
+  }, [annualData, totalNet]);
 
   // Delta vs prior year for peak year
   const deltas = useMemo(() => {
@@ -71,8 +112,9 @@ export function DashboardTab() {
       net: d.netSales / 1e6,
       gtnPct: d.gtnPct,
       wac: forecast[i]?.wacPerUnit ?? 0,
+      rpWac: rp.wacPerUnit[i] ?? 0,
     })),
-    [annualData, forecast]);
+    [annualData, forecast, rp]);
 
   // Channel pie
   const pieData = useMemo(() => {
@@ -146,18 +188,44 @@ export function DashboardTab() {
     <div className="space-y-5">
 
       {/* ── SECTION 1: KPI Strip ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <MetricCard label="Total Gross Sales" value={fmtSales(totalGross)} delta={deltas.gross ?? undefined} />
         <MetricCard label="Total Net Sales" value={fmtSales(totalNet)} delta={deltas.net ?? undefined} />
         <MetricCard label="Avg GTN %" value={fmtPct(avgGtn)} delta={deltas.gtn ?? undefined} />
-        <MetricCard label="Peak Year" value={peakYear ? `${peakYear.year} — ${fmtSales(peakYear.netSales)}` : '—'} />
+        {isBnB ? (
+          <MetricCard
+            label="Avg Provider Spread"
+            value={fmtD(avgProviderSpread)}
+            className={avgProviderSpread > 0 ? 'border-green-300' : 'border-red-300'}
+          />
+        ) : (
+          <MetricCard label="Avg Net $/Unit" value={fmtD(avgNetPrice)} />
+        )}
+        <MetricCard
+          label="Avg Discount to RP"
+          value={fmtPct(avgRPDiscount)}
+          className={avgRPDiscount >= 15 ? 'border-green-300' : avgRPDiscount >= 10 ? 'border-amber-300' : 'border-red-300'}
+        />
       </div>
+
+      {/* Benefit-type indicator */}
+      {isBnB ? (
+        <div className={`text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 font-semibold ${avgProviderSpread > 0 ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+          {avgProviderSpread > 0 ? '✓ Provider margin positive' : '⚠ Provider margin negative — ASP below acquisition'}
+        </div>
+      ) : (
+        <div className={`text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 font-semibold ${formularyColor.replace('border-', 'bg-').replace('300', '50')} ${formularyColor.replace('border-', 'text-').replace('300', '700')} border ${formularyColor}`}>
+          Formulary Position: {formularyPosition} (avg PBM rebate {avgPBMRebate.toFixed(1)}%)
+        </div>
+      )}
 
       {/* Context badge */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs px-3 py-1 bg-[#004567] text-white rounded-full font-semibold">{productName}</span>
         <span className="text-xs px-3 py-1 bg-[#EAECEC] text-[#004567] rounded-full font-medium">{therapyArea}</span>
-        <span className="text-xs px-3 py-1 bg-[#EAECEC] text-[#004567] rounded-full font-medium">{adminRoute.split('(')[0].trim()}</span>
+        <span className={`text-xs px-3 py-1 rounded-full font-semibold ${isBnB ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+          {isBnB ? '💉 Buy & Bill' : '💊 Pharmacy Benefit'}
+        </span>
         <span className="text-xs px-3 py-1 bg-[#EAECEC] text-[#004567] rounded-full font-mono">{firstYear}–{lastYear} · {forecastYears.length}yr</span>
       </div>
 
@@ -204,7 +272,8 @@ export function DashboardTab() {
               <Bar yAxisId="left" dataKey="gross" name="Gross $M" fill="#5B9BD5" opacity={0.7} />
               <Bar yAxisId="left" dataKey="net" name="Net $M" fill="#4ade80" opacity={0.85} />
               <Line yAxisId="right" type="monotone" dataKey="gtnPct" name="GTN %" stroke="#f87171" strokeWidth={2} dot={{ r: 4 }} />
-              <Line yAxisId="right" type="monotone" dataKey="wac" name="WAC $/Unit" stroke="#C98B27" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} />
+              <Line yAxisId="right" type="monotone" dataKey="wac" name="Biosimilar WAC" stroke="#C98B27" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} />
+              <Line yAxisId="right" type="monotone" dataKey="rpWac" name="RP WAC" stroke="#f87171" strokeWidth={1.5} strokeDasharray="8 4" dot={{ r: 3 }} />
             </ComposedChart>
           </ResponsiveContainer>
         )}

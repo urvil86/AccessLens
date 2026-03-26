@@ -1,9 +1,12 @@
 import { create } from 'zustand';
 import type {
   ForecastRow, ChannelAllocation, DiscountRates, RebateRates, OtherRates,
-  IDN, TabId, Scenario, ScenarioSnapshot,
+  IDN, TabId, Scenario, ScenarioSnapshot, BenefitType, IRAConfig, ReferenceProduct, AdoptionConfig,
 } from '../types';
-import { DEFAULT_CHANNEL_ALLOC } from '../engine/constants';
+import {
+  DEFAULT_CHANNEL_ALLOC, BNB_CHANNEL_ALLOC, PBX_CHANNEL_ALLOC,
+  BNB_REBATE_DEFAULTS, PBX_REBATE_DEFAULTS,
+} from '../engine/constants';
 
 // ── localStorage helpers ─────────────────────────────────────────────────
 
@@ -30,7 +33,7 @@ interface AppState {
   // Config
   productName: string;
   therapyArea: string;
-  adminRoute: string;
+  benefitType: BenefitType;
   nYears: number;
   startYear: number;
   activeTab: TabId;
@@ -43,6 +46,9 @@ interface AppState {
   otherRates: OtherRates[];
   idnList: IDN[];
   activeChannels: string[];
+  iraConfig: IRAConfig;
+  referenceProduct: ReferenceProduct;
+  adoptionConfig: AdoptionConfig;
 
   // Scenario management
   scenarios: Record<string, Scenario>;
@@ -52,7 +58,7 @@ interface AppState {
   // Config actions
   setProductName: (v: string) => void;
   setTherapyArea: (v: string) => void;
-  setAdminRoute: (v: string) => void;
+  setBenefitType: (v: BenefitType) => void;
   setNYears: (v: number) => void;
   setStartYear: (v: number) => void;
   setActiveTab: (v: TabId) => void;
@@ -73,6 +79,9 @@ interface AppState {
   removeIDN: (idx: number) => void;
   updateIDN: (idx: number, updates: Partial<IDN>) => void;
   setActiveChannels: (v: string[]) => void;
+  setIRAConfig: (v: Partial<IRAConfig>) => void;
+  setReferenceProduct: (v: Partial<ReferenceProduct>) => void;
+  setAdoptionConfig: (v: Partial<AdoptionConfig>) => void;
   reinitialize: () => void;
 
   // Scenario actions
@@ -87,25 +96,32 @@ interface AppState {
 
 // ── Default generators ───────────────────────────────────────────────────
 
-function generateDefaults(startYear: number, nYears: number) {
+function generateDefaults(startYear: number, nYears: number, benefitType: BenefitType = 'buy-and-bill') {
   const years = Array.from({ length: nYears }, (_, i) => startYear + i);
   const baseUnits = [10000, 22000, 38000, 50000, 58000, 62000, 65000, 67000, 68000, 69000];
 
-  const forecast: ForecastRow[] = years.map((year, i) => ({
-    year,
-    annualUnits: baseUnits[i] ?? 69000,
-    wacPerUnit: Math.round(1500 * Math.pow(1.03, i) * 100) / 100,
-    monthlyProfile: i === 0 ? 'S-Curve (Launch)' : 'Flat',
-  }));
+  const forecast: ForecastRow[] = years.map((year, i) => {
+    const wac = Math.round(1500 * Math.pow(1.015, i) * 100) / 100;
+    return {
+      year,
+      annualUnits: baseUnits[i] ?? 69000,
+      wacPerUnit: wac,
+      ampPerUnit: Math.round(wac * 0.85 * 100) / 100, // AMP ≈ 85% of WAC
+      monthlyProfile: i === 0 ? 'S-Curve (Launch)' : 'Flat',
+    };
+  });
+
+  const chAlloc = benefitType === 'buy-and-bill' ? BNB_CHANNEL_ALLOC : PBX_CHANNEL_ALLOC;
+  const rebDef = benefitType === 'buy-and-bill' ? BNB_REBATE_DEFAULTS : PBX_REBATE_DEFAULTS;
 
   const channelAllocations: ChannelAllocation[] = years.map(year => ({
     year,
-    allocations: { ...DEFAULT_CHANNEL_ALLOC },
+    allocations: { ...chAlloc },
   }));
 
   const discounts: DiscountRates[] = years.map((year, i) => ({
     year,
-    gpo: Math.round((14 + i * 0.3) * 10) / 10,
+    gpo: Math.round((18 + i * 0.3) * 10) / 10,
     idn: Math.round((20 + i * 0.4) * 10) / 10,
     b340: 25.6,
     va: 24.0,
@@ -113,11 +129,11 @@ function generateDefaults(startYear: number, nYears: number) {
 
   const rebates: RebateRates[] = years.map((year, i) => ({
     year,
-    comPbm: Math.round((32 + i * 0.5) * 10) / 10,
-    comMed: Math.round((13 + i * 0.3) * 10) / 10,
-    mcrD: Math.round((28 + i * 0.5) * 10) / 10,
-    mcaid: 23.1,
-    manMcaid: Math.round((42 + i * 0.3) * 10) / 10,
+    comPbm: Math.round((rebDef.comPbm + i * 0.5) * 10) / 10,
+    comMed: Math.round((rebDef.comMed + i * 0.3) * 10) / 10,
+    mcrD: Math.round((rebDef.mcrD + i * 0.4) * 10) / 10,
+    mcaid: rebDef.mcaid,
+    manMcaid: Math.round((rebDef.manMcaid + i * 0.3) * 10) / 10,
   }));
 
   const otherRates: OtherRates[] = years.map(year => ({
@@ -126,9 +142,18 @@ function generateDefaults(startYear: number, nYears: number) {
     distFee: 2.0,
     copay: 3.5,
     returns: 1.5,
+    specialtyPharmFee: 1.5,
+    papCost: 4.0,
   }));
 
-  return { forecast, channelAllocations, discounts, rebates, otherRates };
+  const referenceProduct: ReferenceProduct = {
+    name: 'Reference Product',
+    wacPerUnit: years.map((_, i) => Math.round(3000 * Math.pow(1.05, i) * 100) / 100),
+    totalMarketUnits: years.map((_, i) => Math.round(200000 * Math.pow(0.97, i))),
+    isInterchangeable: false,
+  };
+
+  return { forecast, channelAllocations, discounts, rebates, otherRates, referenceProduct };
 }
 
 // ── Snapshot helpers ─────────────────────────────────────────────────────
@@ -144,7 +169,10 @@ function takeSnapshot(s: AppState): ScenarioSnapshot {
     activeChannels: [...s.activeChannels],
     productName: s.productName,
     therapyArea: s.therapyArea,
-    adminRoute: s.adminRoute,
+    benefitType: s.benefitType,
+    iraConfig: { ...s.iraConfig },
+    referenceProduct: JSON.parse(JSON.stringify(s.referenceProduct)),
+    adoptionConfig: { ...s.adoptionConfig },
     nYears: s.nYears,
     startYear: s.startYear,
   };
@@ -161,7 +189,10 @@ function restoreSnapshot(snap: ScenarioSnapshot): Partial<AppState> {
     activeChannels: [...snap.activeChannels],
     productName: snap.productName,
     therapyArea: snap.therapyArea,
-    adminRoute: snap.adminRoute,
+    benefitType: snap.benefitType,
+    iraConfig: snap.iraConfig ? { ...snap.iraConfig } : { enabled: true, baselineASP: 0, baselineYear: 2025, annualCPIU: 3.0 },
+    referenceProduct: snap.referenceProduct ? JSON.parse(JSON.stringify(snap.referenceProduct)) : undefined,
+    adoptionConfig: snap.adoptionConfig ? { ...snap.adoptionConfig } : undefined,
     nYears: snap.nYears,
     startYear: snap.startYear,
   };
@@ -176,17 +207,18 @@ function generateChangesSummary(prev: ScenarioSnapshot | null, curr: ScenarioSna
   if (JSON.stringify(prev.rebates) !== JSON.stringify(curr.rebates)) changes.push('rebates');
   if (JSON.stringify(prev.otherRates) !== JSON.stringify(curr.otherRates)) changes.push('fees');
   if (JSON.stringify(prev.idnList) !== JSON.stringify(curr.idnList)) changes.push('IDN list');
+  if (JSON.stringify(prev.referenceProduct) !== JSON.stringify(curr.referenceProduct)) changes.push('reference product');
   return changes.length > 0 ? `Updated ${changes.join(', ')}` : 'No changes';
 }
 
 // ── Store ────────────────────────────────────────────────────────────────
 
-const initialDefaults = generateDefaults(2025, 7);
+const initialDefaults = generateDefaults(2025, 7, 'buy-and-bill');
 
 export const useStore = create<AppState>((set, get) => ({
   productName: 'RXPRODUCT-001',
   therapyArea: 'Oncology',
-  adminRoute: 'IV Infusion (Buy & Bill)',
+  benefitType: 'buy-and-bill' as BenefitType,
   nYears: 7,
   startYear: 2025,
   activeTab: 'dashboard',
@@ -201,6 +233,11 @@ export const useStore = create<AppState>((set, get) => ({
     { name: 'IDN-E (VA Affiliate)', discount: 24.0, volumePct: 10.0, is340b: false },
   ],
   activeChannels: [...Object.keys(DEFAULT_CHANNEL_ALLOC)],
+  iraConfig: { enabled: true, baselineASP: 0, baselineYear: 2025, annualCPIU: 3.0 },
+  adoptionConfig: {
+    enabled: false, mode: 'manual' as const, launchMonth: 1, peakSharePct: 40,
+    timeToSteadyStateYears: 3, switchRatePctPerMonth: 3, newPatientCapturePct: 60, interchangeableUplift: 2.5,
+  },
 
   // Scenario state
   scenarios: loadScenarios(),
@@ -211,15 +248,30 @@ export const useStore = create<AppState>((set, get) => ({
 
   setProductName: (v) => set({ productName: v, dirty: true }),
   setTherapyArea: (v) => set({ therapyArea: v, dirty: true }),
-  setAdminRoute: (v) => set({ adminRoute: v, dirty: true }),
+  setBenefitType: (v: BenefitType) => {
+    const s = get();
+    const chAlloc = v === 'buy-and-bill' ? BNB_CHANNEL_ALLOC : PBX_CHANNEL_ALLOC;
+    const rebDef = v === 'buy-and-bill' ? BNB_REBATE_DEFAULTS : PBX_REBATE_DEFAULTS;
+    const years = Array.from({ length: s.nYears }, (_, i) => s.startYear + i);
+    const channelAllocations = years.map(year => ({ year, allocations: { ...chAlloc } }));
+    const rebates = years.map((year, i) => ({
+      year,
+      comPbm: Math.round((rebDef.comPbm + i * 0.5) * 10) / 10,
+      comMed: Math.round((rebDef.comMed + i * 0.3) * 10) / 10,
+      mcrD: Math.round((rebDef.mcrD + i * 0.4) * 10) / 10,
+      mcaid: rebDef.mcaid,
+      manMcaid: Math.round((rebDef.manMcaid + i * 0.3) * 10) / 10,
+    }));
+    set({ benefitType: v, channelAllocations, rebates, dirty: true });
+  },
   setNYears: (v) => {
     const s = get();
-    const defaults = generateDefaults(s.startYear, v);
+    const defaults = generateDefaults(s.startYear, v, s.benefitType);
     set({ nYears: v, ...defaults, dirty: true });
   },
   setStartYear: (v) => {
     const s = get();
-    const defaults = generateDefaults(v, s.nYears);
+    const defaults = generateDefaults(v, s.nYears, s.benefitType);
     set({ startYear: v, ...defaults, dirty: true });
   },
   setActiveTab: (v) => set({ activeTab: v }),
@@ -277,9 +329,12 @@ export const useStore = create<AppState>((set, get) => ({
     return { idnList, dirty: true };
   }),
   setActiveChannels: (v) => set({ activeChannels: v, dirty: true }),
+  setIRAConfig: (v) => set(s => ({ iraConfig: { ...s.iraConfig, ...v }, dirty: true })),
+  setReferenceProduct: (v) => set(s => ({ referenceProduct: { ...s.referenceProduct, ...v }, dirty: true })),
+  setAdoptionConfig: (v) => set(s => ({ adoptionConfig: { ...s.adoptionConfig, ...v }, dirty: true })),
   reinitialize: () => {
     const s = get();
-    const defaults = generateDefaults(s.startYear, s.nYears);
+    const defaults = generateDefaults(s.startYear, s.nYears, s.benefitType);
     set({ ...defaults, dirty: true });
   },
 
