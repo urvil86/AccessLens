@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* Chryselys 2026 Brand Palette */
+  --color-navy: #004567;
+  --color-charcoal: #44546A;
+  --color-white: #FFFFFF;
+  --color-light-gray: #EAECEC;
+  --color-gold: #C98B27;
+  --color-cream: #E8E1CE;
+  --color-cream-light: #FFF9EE;
+  --color-sand: #C6B78A;
+  --color-slate-blue: #9296B2;
+  --color-dark-slate: #5C6082;
+  --color-sky-blue: #5B9BD5;
+  --color-dark-navy: #004466;
+  --color-hlink: #5F5F5F;
+  --color-folhlink: #919191;
+
+  --font-family-sans: 'Roboto Slab', Georgia, serif;
+  --font-family-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-family-sans);
+    background-color: #ffffff;
+    color: #44546A;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  #root {
+    display: flex;
+    min-height: 100vh;
+  }
+}
+
+/* Number input spinner removal */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #EAECEC;
+}
+::-webkit-scrollbar-thumb {
+  background: #9296B2;
+  border-radius: 3px;
+}
+
+/* Range slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #EAECEC;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #C98B27;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #C98B27;
+  cursor: pointer;
+  border: none;
+}
