@@ -1,6 +1,6 @@
 import { useStore } from '../store/useStore';
 import { THERAPY_AREAS, BENEFIT_TYPES } from '../engine/constants';
-import chryselysLogo from '../assets/chryselys-logo.svg';
+import chryselysLogo from '../assets/chryselys-logo.png';
 
 export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
   const {

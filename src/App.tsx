@@ -7,7 +7,7 @@ import { AssumptionsPage } from './pages/Assumptions';
 import { ResultsPage } from './pages/Results';
 import { ScenariosPage } from './pages/Scenarios';
 import { useKeyboardShortcuts } from './engine/useKeyboardShortcuts';
-import chryselysLogo from './assets/chryselys-logo.svg';
+import chryselysLogo from './assets/chryselys-logo.png';
 
 function App() {
   useKeyboardShortcuts();
