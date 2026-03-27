@@ -45,13 +45,19 @@ function GTNSummaryTab() {
   const totalIRA = annualData.reduce((s, d) => s + (d.iraRebate ?? 0), 0);
   const totalNetAll = annualData.reduce((s, d) => s + (d.netSalesAfterIRA ?? d.netSales), 0);
 
+  const g = totalGrossAll / 1e6;
+  const r = totalReb / 1e6;
+  const c = totalCB / 1e6;
+  const f = totalFees / 1e6;
+  const ira = totalIRA / 1e6;
+  const n = totalNetAll / 1e6;
   const wfSteps = [
-    { label: 'Gross Sales', base: 0, value: totalGrossAll / 1e6, fill: '#5B9BD5' },
-    { label: 'Rebates', base: (totalGrossAll - totalReb) / 1e6, value: totalReb / 1e6, fill: '#f87171' },
-    { label: 'Chargebacks', base: (totalGrossAll - totalReb - totalCB) / 1e6, value: totalCB / 1e6, fill: '#C6B78A' },
-    { label: 'Fees/Other', base: (totalGrossAll - totalReb - totalCB - totalFees) / 1e6, value: totalFees / 1e6, fill: '#C98B27' },
-    ...(totalIRA > 0 ? [{ label: 'IRA Rebate', base: (totalGrossAll - totalReb - totalCB - totalFees - totalIRA) / 1e6, value: totalIRA / 1e6, fill: '#9333ea' }] : []),
-    { label: 'Net Sales', base: 0, value: totalNetAll / 1e6, fill: '#4ade80' },
+    { label: 'Gross Sales', base: 0, segment: g, fill: '#5B9BD5', displayLabel: `$${g.toFixed(1)}M` },
+    { label: '(-) Rebates', base: g - r, segment: r, fill: '#f87171', displayLabel: `-$${r.toFixed(1)}M` },
+    { label: '(-) Chargebacks', base: g - r - c, segment: c, fill: '#C6B78A', displayLabel: `-$${c.toFixed(1)}M` },
+    { label: '(-) Fees/Other', base: g - r - c - f, segment: f, fill: '#C98B27', displayLabel: `-$${f.toFixed(1)}M` },
+    ...(ira > 0.01 ? [{ label: '(-) IRA Rebate', base: g - r - c - f - ira, segment: ira, fill: '#9333ea', displayLabel: `-$${ira.toFixed(1)}M` }] : []),
+    { label: 'Net Sales', base: 0, segment: n, fill: '#4ade80', displayLabel: `$${n.toFixed(1)}M` },
   ];
 
   const trendData = annualData.map(d => ({ year: d.year, gtnPct: d.gtnPct, netPrice: d.netPrice }));
@@ -100,19 +106,25 @@ function GTNSummaryTab() {
       <SectionHeader>Annual GTN Waterfall</SectionHeader>
       <div className="bg-white rounded-xl border border-[#EAECEC] p-4">
         <ResponsiveContainer width="100%" height={380}>
-          <BarChart data={wfSteps}>
+          <BarChart data={wfSteps} barCategoryGap="20%">
             <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
-            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
             <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}M`} tick={{ fontSize: 11 }} />
             <Tooltip
               formatter={(v: number, name: string) => {
                 if (name === 'base') return [null, null];
-                return [`$${Number(v).toFixed(1)}M`, name === 'value' ? 'Amount' : name];
+                return [`$${Number(v).toFixed(1)}M`, name === 'segment' ? 'Amount' : name];
               }}
               contentStyle={{ fontSize: 12 }}
             />
-            <Bar dataKey="base" stackId="wf" fill="transparent" />
-            <Bar dataKey="value" stackId="wf" label={{ position: 'top', fontSize: 10, formatter: (v: number) => `$${Number(v).toFixed(1)}M` }}>
+            <Bar dataKey="base" stackId="wf" fillOpacity={0} stroke="none" />
+            <Bar dataKey="segment" stackId="wf"
+              label={{ position: 'insideTop', fontSize: 10, fill: '#fff', fontWeight: 700,
+                formatter: (_: number, item: unknown) => {
+                  const entry = item as { payload?: { displayLabel?: string } };
+                  return entry?.payload?.displayLabel ?? '';
+                }
+              }}>
               {wfSteps.map((entry, i) => (
                 <Cell key={i} fill={entry.fill} />
               ))}

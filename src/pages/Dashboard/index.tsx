@@ -91,17 +91,22 @@ export function DashboardTab() {
   // ── Chart data ──
 
   // Waterfall
-  // Proper waterfall: invisible base + visible segment
+  // Waterfall: invisible base + visible colored segment (bridge chart)
   const waterfallData = useMemo(() => {
     const totReb = annualData.reduce((s, d) => s + d.totalRebates, 0);
     const totCB = annualData.reduce((s, d) => s + d.totalChargebacks, 0);
     const totOth = annualData.reduce((s, d) => s + d.totalOther, 0);
+    const g = totalGross / 1e6;
+    const r = totReb / 1e6;
+    const c = totCB / 1e6;
+    const o = totOth / 1e6;
+    const n = totalNet / 1e6;
     return [
-      { label: 'Gross Sales', base: 0, value: totalGross / 1e6, fill: '#5B9BD5' },
-      { label: 'Rebates', base: (totalGross - totReb) / 1e6, value: totReb / 1e6, fill: '#f87171' },
-      { label: 'Chargebacks', base: (totalGross - totReb - totCB) / 1e6, value: totCB / 1e6, fill: '#C6B78A' },
-      { label: 'Fees/Other', base: (totalGross - totReb - totCB - totOth) / 1e6, value: totOth / 1e6, fill: '#C98B27' },
-      { label: 'Net Sales', base: 0, value: totalNet / 1e6, fill: '#4ade80' },
+      { label: 'Gross Sales', base: 0, segment: g, fill: '#5B9BD5', displayLabel: `$${g.toFixed(1)}M`, topVal: g },
+      { label: `(-) Rebates`, base: g - r, segment: r, fill: '#f87171', displayLabel: `-$${r.toFixed(1)}M`, topVal: g },
+      { label: `(-) Chargebacks`, base: g - r - c, segment: c, fill: '#C6B78A', displayLabel: `-$${c.toFixed(1)}M`, topVal: g - r },
+      { label: `(-) Fees/Other`, base: g - r - c - o, segment: o, fill: '#C98B27', displayLabel: `-$${o.toFixed(1)}M`, topVal: g - r - c },
+      { label: 'Net Sales', base: 0, segment: n, fill: '#4ade80', displayLabel: `$${n.toFixed(1)}M`, topVal: n },
     ];
   }, [annualData, totalGross, totalNet]);
 
@@ -246,19 +251,26 @@ export function DashboardTab() {
         {/* View A: Waterfall */}
         {chartView === 'waterfall' && (
           <ResponsiveContainer width="100%" height={400}>
-            <BarChart data={waterfallData}>
+            <BarChart data={waterfallData} barCategoryGap="20%">
               <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
-              <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+              <XAxis dataKey="label" tick={{ fontSize: 10 }} />
               <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}M`} tick={{ fontSize: 11 }} />
               <Tooltip
                 formatter={(v: number, name: string) => {
                   if (name === 'base') return [null, null];
-                  return [`$${Number(v).toFixed(1)}M`, 'Amount'];
+                  return [`$${Number(v).toFixed(1)}M`, name === 'segment' ? 'Amount' : name];
                 }}
                 contentStyle={{ fontSize: 12 }}
+                itemStyle={{ color: '#004567' }}
               />
-              <Bar dataKey="base" stackId="wf" fill="transparent" />
-              <Bar dataKey="value" stackId="wf" label={{ position: 'top', fontSize: 10, formatter: (v: number) => `$${Number(v).toFixed(1)}M` }}>
+              <Bar dataKey="base" stackId="wf" fillOpacity={0} stroke="none" />
+              <Bar dataKey="segment" stackId="wf"
+                label={{ position: 'insideTop', fontSize: 10, fill: '#fff', fontWeight: 700,
+                  formatter: (_: number, item: unknown) => {
+                    const entry = item as { payload?: { displayLabel?: string } };
+                    return entry?.payload?.displayLabel ?? '';
+                  }
+                }}>
                 {waterfallData.map((entry, i) => (
                   <Cell key={i} fill={entry.fill} />
                 ))}
