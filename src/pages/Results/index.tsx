@@ -13,7 +13,7 @@ import { exportResults, triggerDownload } from '../../engine/excelIO';
 import {
   ComposedChart, BarChart, Bar, Line, LineChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, ReferenceLine,
+  ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts';
 
 const IDN_LINE_COLORS = ['#e11d48', '#7c3aed', '#0891b2', '#ca8a04', '#16a34a', '#db2777', '#6366f1', '#14b8a6'];
@@ -37,15 +37,22 @@ function GTNSummaryTab() {
     ? annualData.reduce((best, d) => (d.netSales > best.netSales ? d : best), annualData[0]).year
     : '—';
 
-  const waterfallData = annualData.map(d => ({
-    year: d.year,
-    grossSales: d.grossSales,
-    rebates: -d.totalRebates,
-    chargebacks: -d.totalChargebacks,
-    feesOther: -d.totalOther,
-    iraRebate: -d.iraRebate,
-    netSales: d.netSalesAfterIRA,
-  }));
+  // Proper waterfall: each bar shows its segment with an invisible base
+  const totalGrossAll = annualData.reduce((s, d) => s + d.grossSales, 0);
+  const totalReb = annualData.reduce((s, d) => s + d.totalRebates, 0);
+  const totalCB = annualData.reduce((s, d) => s + d.totalChargebacks, 0);
+  const totalFees = annualData.reduce((s, d) => s + d.totalOther, 0);
+  const totalIRA = annualData.reduce((s, d) => s + (d.iraRebate ?? 0), 0);
+  const totalNetAll = annualData.reduce((s, d) => s + (d.netSalesAfterIRA ?? d.netSales), 0);
+
+  const wfSteps = [
+    { label: 'Gross Sales', base: 0, value: totalGrossAll / 1e6, fill: '#5B9BD5' },
+    { label: 'Rebates', base: (totalGrossAll - totalReb) / 1e6, value: totalReb / 1e6, fill: '#f87171' },
+    { label: 'Chargebacks', base: (totalGrossAll - totalReb - totalCB) / 1e6, value: totalCB / 1e6, fill: '#C6B78A' },
+    { label: 'Fees/Other', base: (totalGrossAll - totalReb - totalCB - totalFees) / 1e6, value: totalFees / 1e6, fill: '#C98B27' },
+    ...(totalIRA > 0 ? [{ label: 'IRA Rebate', base: (totalGrossAll - totalReb - totalCB - totalFees - totalIRA) / 1e6, value: totalIRA / 1e6, fill: '#9333ea' }] : []),
+    { label: 'Net Sales', base: 0, value: totalNetAll / 1e6, fill: '#4ade80' },
+  ];
 
   const trendData = annualData.map(d => ({ year: d.year, gtnPct: d.gtnPct, netPrice: d.netPrice }));
 
@@ -93,21 +100,24 @@ function GTNSummaryTab() {
       <SectionHeader>Annual GTN Waterfall</SectionHeader>
       <div className="bg-white rounded-xl border border-[#EAECEC] p-4">
         <ResponsiveContainer width="100%" height={380}>
-          <ComposedChart data={waterfallData} stackOffset="sign">
+          <BarChart data={wfSteps}>
             <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
-            <XAxis dataKey="year" tick={{ fontSize: 12 }} />
-            <YAxis tickFormatter={(v: number) => fmtM(v)} tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v: number, name: string) => [fmtM(Math.abs(v)), name]} contentStyle={{ fontSize: 12 }} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Bar dataKey="grossSales" name="Gross Sales" stackId="a" fill="#5B9BD5" />
-            <Bar dataKey="rebates" name="Rebates" stackId="a" fill="#f87171" />
-            <Bar dataKey="chargebacks" name="Chargebacks" stackId="a" fill="#C6B78A" />
-            <Bar dataKey="feesOther" name="Fees/Other" stackId="a" fill="#C98B27" />
-            <Bar dataKey="iraRebate" name="IRA Inflation Rebate" stackId="a" fill="#9333ea" />
-            <Line type="monotone" dataKey="netSales" name="Net Sales (after IRA)" stroke="#4ade80" strokeWidth={2}
-              dot={{ r: 5, fill: '#4ade80', strokeWidth: 0 }}
-              label={{ position: 'top', fontSize: 10, formatter: (v: number) => fmtM(v) }} />
-          </ComposedChart>
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}M`} tick={{ fontSize: 11 }} />
+            <Tooltip
+              formatter={(v: number, name: string) => {
+                if (name === 'base') return [null, null];
+                return [`$${Number(v).toFixed(1)}M`, name === 'value' ? 'Amount' : name];
+              }}
+              contentStyle={{ fontSize: 12 }}
+            />
+            <Bar dataKey="base" stackId="wf" fill="transparent" />
+            <Bar dataKey="value" stackId="wf" label={{ position: 'top', fontSize: 10, formatter: (v: number) => `$${Number(v).toFixed(1)}M` }}>
+              {wfSteps.map((entry, i) => (
+                <Cell key={i} fill={entry.fill} />
+              ))}
+            </Bar>
+          </BarChart>
         </ResponsiveContainer>
       </div>
 
@@ -604,9 +614,14 @@ function PayerPBMTab() {
   });
 
   // Formulary position by year
+  const formularyOverride = useStore(s => s.formularyTierOverride);
   const formularyByYear = rebates.map(r => {
-    const tier = r.comPbm > 25 ? 'Preferred' : r.comPbm >= 15 ? 'Non-Preferred' : 'Non-Formulary';
-    return { year: r.year, tier, rebate: r.comPbm };
+    const autoTier = r.comPbm > 25 ? 'Preferred' : r.comPbm >= 15 ? 'Non-Preferred' : 'Non-Formulary';
+    const tier = formularyOverride === 'auto' ? autoTier : (formularyOverride.charAt(0).toUpperCase() + formularyOverride.slice(1)).replace('-', '-');
+    const displayTier = formularyOverride === 'auto' ? autoTier
+      : formularyOverride === 'preferred' ? 'Preferred'
+      : formularyOverride === 'non-preferred' ? 'Non-Preferred' : 'Non-Formulary';
+    return { year: r.year, tier: displayTier, rebate: r.comPbm };
   });
 
   return (

@@ -659,13 +659,26 @@ function ReferenceProductSection() {
           <input type="text" value={rp.name} onChange={e => setRP({ name: e.target.value })}
             className="w-full px-2 py-1.5 border border-[#EAECEC] rounded text-sm text-[#004567] font-semibold focus:ring-1 focus:ring-[#C98B27] outline-none" />
         </div>
-        <div className="flex items-end">
+        <div>
           <label className="flex items-center gap-2 text-sm text-[#004567] cursor-pointer">
             <input type="checkbox" checked={rp.isInterchangeable} onChange={e => setRP({ isInterchangeable: e.target.checked })}
               className="accent-[#004567] w-4 h-4" />
             <span className="font-semibold">Interchangeable Designation</span>
+            <span className="text-[9px] text-[#9296B2]" title="Interchangeable = automatic pharmacy substitution allowed. Dramatically increases PBM uptake.">ⓘ</span>
           </label>
-          <span className="ml-2 text-[9px] text-[#9296B2]" title="Interchangeable = automatic pharmacy substitution allowed. Dramatically increases PBM uptake.">ⓘ</span>
+          {rp.isInterchangeable && (
+            <div className="mt-2 text-xs bg-green-50 border border-green-200 rounded-lg p-2 text-green-700">
+              <strong>Interchangeable active:</strong> Pharmacy-level substitution allowed without prescriber intervention.
+              This increases PBM channel uptake, boosts adoption switch rate by {useStore.getState().adoptionConfig.interchangeableUplift}x,
+              and improves formulary positioning.
+            </div>
+          )}
+          {!rp.isInterchangeable && (
+            <div className="mt-2 text-xs bg-amber-50 border border-amber-200 rounded-lg p-2 text-amber-700">
+              <strong>Not interchangeable:</strong> Requires prescriber authorization for substitution.
+              Lower PBM auto-substitution, slower adoption curve.
+            </div>
+          )}
         </div>
       </div>
 
@@ -1038,6 +1051,43 @@ export function AssumptionsPage() {
 
       <Accordion title="Contract Terms" summary={contractSummary}>
         <ContractTermsSection />
+      </Accordion>
+
+      <Accordion title="Formulary Positioning" summary={store.formularyTierOverride === 'auto' ? 'Auto (from PBM rebate depth)' : store.formularyTierOverride}>
+        <div className="space-y-3">
+          <div className="bg-[#FFF9EE] border-l-4 border-[#C98B27] rounded-lg px-4 py-3 text-sm text-[#004567]">
+            Set the expected formulary tier for your biosimilar. "Auto" derives it from PBM rebate depth.
+            Override to model specific payer decisions.
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="text-xs font-semibold text-[#44546A]">Formulary Tier:</label>
+            <select value={store.formularyTierOverride} onChange={e => store.setFormularyTierOverride(e.target.value as 'auto' | 'preferred' | 'non-preferred' | 'non-formulary')}
+              className="px-3 py-1.5 border border-[#EAECEC] rounded text-sm font-semibold text-[#004567] focus:ring-1 focus:ring-[#C98B27] outline-none">
+              <option value="auto">Auto (based on PBM rebate depth)</option>
+              <option value="preferred">Preferred (Tier 1/2)</option>
+              <option value="non-preferred">Non-Preferred (Tier 3)</option>
+              <option value="non-formulary">Non-Formulary</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-3 gap-3 mt-2">
+            {(['preferred', 'non-preferred', 'non-formulary'] as const).map(tier => {
+              const active = store.formularyTierOverride === tier || (store.formularyTierOverride === 'auto' && (
+                (tier === 'preferred' && (store.rebates[0]?.comPbm ?? 0) > 25) ||
+                (tier === 'non-preferred' && (store.rebates[0]?.comPbm ?? 0) >= 15 && (store.rebates[0]?.comPbm ?? 0) <= 25) ||
+                (tier === 'non-formulary' && (store.rebates[0]?.comPbm ?? 0) < 15)
+              ));
+              const colors = { preferred: 'border-green-300 bg-green-50 text-green-700', 'non-preferred': 'border-amber-300 bg-amber-50 text-amber-700', 'non-formulary': 'border-red-300 bg-red-50 text-red-700' };
+              const descs = { preferred: 'Automatic substitution, highest volume share', 'non-preferred': 'Requires prior auth or step therapy', 'non-formulary': 'Not covered, minimal volume' };
+              return (
+                <div key={tier} className={`rounded-lg p-3 border-2 text-center ${active ? colors[tier] : 'border-[#EAECEC] text-[#9296B2]'}`}>
+                  <div className="text-xs font-bold capitalize">{tier.replace('-', ' ')}</div>
+                  <div className="text-[9px] mt-1">{descs[tier]}</div>
+                  {active && <div className="text-[10px] font-bold mt-1">← Current</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </Accordion>
 
       <Accordion title="IRA / Inflation Rebate Settings" summary={store.iraConfig.enabled ? `CPI-U ${store.iraConfig.annualCPIU}% — active` : 'Disabled'}>

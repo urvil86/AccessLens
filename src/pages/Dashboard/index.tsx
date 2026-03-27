@@ -7,7 +7,7 @@ import { Accordion } from '../../shared/Accordion';
 import { DataTable } from '../../shared/DataTable';
 import { COLORS_MAIN } from '../../engine/constants';
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ComposedChart, BarChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts';
 
@@ -91,16 +91,17 @@ export function DashboardTab() {
   // ── Chart data ──
 
   // Waterfall
+  // Proper waterfall: invisible base + visible segment
   const waterfallData = useMemo(() => {
     const totReb = annualData.reduce((s, d) => s + d.totalRebates, 0);
     const totCB = annualData.reduce((s, d) => s + d.totalChargebacks, 0);
     const totOth = annualData.reduce((s, d) => s + d.totalOther, 0);
     return [
-      { label: 'Gross Sales', value: totalGross / 1e6, fill: '#5B9BD5' },
-      { label: 'Rebates', value: -totReb / 1e6, fill: '#f87171' },
-      { label: 'Chargebacks', value: -totCB / 1e6, fill: '#C6B78A' },
-      { label: 'Fees/Other', value: -totOth / 1e6, fill: '#C98B27' },
-      { label: 'Net Sales', value: totalNet / 1e6, fill: '#4ade80' },
+      { label: 'Gross Sales', base: 0, value: totalGross / 1e6, fill: '#5B9BD5' },
+      { label: 'Rebates', base: (totalGross - totReb) / 1e6, value: totReb / 1e6, fill: '#f87171' },
+      { label: 'Chargebacks', base: (totalGross - totReb - totCB) / 1e6, value: totCB / 1e6, fill: '#C6B78A' },
+      { label: 'Fees/Other', base: (totalGross - totReb - totCB - totOth) / 1e6, value: totOth / 1e6, fill: '#C98B27' },
+      { label: 'Net Sales', base: 0, value: totalNet / 1e6, fill: '#4ade80' },
     ];
   }, [annualData, totalGross, totalNet]);
 
@@ -245,17 +246,24 @@ export function DashboardTab() {
         {/* View A: Waterfall */}
         {chartView === 'waterfall' && (
           <ResponsiveContainer width="100%" height={400}>
-            <ComposedChart data={waterfallData}>
+            <BarChart data={waterfallData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
               <XAxis dataKey="label" tick={{ fontSize: 12 }} />
               <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}M`} tick={{ fontSize: 11 }} />
-              <Tooltip contentStyle={{ fontSize: 12 }} formatter={(v: number) => [`$${Math.abs(Number(v)).toFixed(1)}M`]} />
-              <Bar dataKey="value" name="Amount ($M)">
+              <Tooltip
+                formatter={(v: number, name: string) => {
+                  if (name === 'base') return [null, null];
+                  return [`$${Number(v).toFixed(1)}M`, 'Amount'];
+                }}
+                contentStyle={{ fontSize: 12 }}
+              />
+              <Bar dataKey="base" stackId="wf" fill="transparent" />
+              <Bar dataKey="value" stackId="wf" label={{ position: 'top', fontSize: 10, formatter: (v: number) => `$${Number(v).toFixed(1)}M` }}>
                 {waterfallData.map((entry, i) => (
                   <Cell key={i} fill={entry.fill} />
                 ))}
               </Bar>
-            </ComposedChart>
+            </BarChart>
           </ResponsiveContainer>
         )}
 
@@ -266,14 +274,12 @@ export function DashboardTab() {
               <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
               <XAxis dataKey="year" tick={{ fontSize: 12 }} />
               <YAxis yAxisId="left" tickFormatter={(v: number) => `$${v.toFixed(0)}M`} tick={{ fontSize: 11 }} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
+              <YAxis yAxisId="right" orientation="right" tickFormatter={(v: number) => `${v.toFixed(0)}%`} tick={{ fontSize: 11 }} domain={[0, 'auto']} />
               <Tooltip contentStyle={{ fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar yAxisId="left" dataKey="gross" name="Gross $M" fill="#5B9BD5" opacity={0.7} />
               <Bar yAxisId="left" dataKey="net" name="Net $M" fill="#4ade80" opacity={0.85} />
               <Line yAxisId="right" type="monotone" dataKey="gtnPct" name="GTN %" stroke="#f87171" strokeWidth={2} dot={{ r: 4 }} />
-              <Line yAxisId="right" type="monotone" dataKey="wac" name="Biosimilar WAC" stroke="#C98B27" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} />
-              <Line yAxisId="right" type="monotone" dataKey="rpWac" name="RP WAC" stroke="#f87171" strokeWidth={1.5} strokeDasharray="8 4" dot={{ r: 3 }} />
             </ComposedChart>
           </ResponsiveContainer>
         )}

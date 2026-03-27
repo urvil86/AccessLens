@@ -49,6 +49,7 @@ interface AppState {
   iraConfig: IRAConfig;
   referenceProduct: ReferenceProduct;
   adoptionConfig: AdoptionConfig;
+  formularyTierOverride: 'auto' | 'preferred' | 'non-preferred' | 'non-formulary';
 
   // Scenario management
   scenarios: Record<string, Scenario>;
@@ -82,6 +83,7 @@ interface AppState {
   setIRAConfig: (v: Partial<IRAConfig>) => void;
   setReferenceProduct: (v: Partial<ReferenceProduct>) => void;
   setAdoptionConfig: (v: Partial<AdoptionConfig>) => void;
+  setFormularyTierOverride: (v: 'auto' | 'preferred' | 'non-preferred' | 'non-formulary') => void;
   reinitialize: () => void;
 
   // Scenario actions
@@ -238,6 +240,7 @@ export const useStore = create<AppState>((set, get) => ({
     enabled: false, mode: 'manual' as const, launchMonth: 1, peakSharePct: 40,
     timeToSteadyStateYears: 3, switchRatePctPerMonth: 3, newPatientCapturePct: 60, interchangeableUplift: 2.5,
   },
+  formularyTierOverride: 'auto' as const,
 
   // Scenario state
   scenarios: loadScenarios(),
@@ -332,6 +335,7 @@ export const useStore = create<AppState>((set, get) => ({
   setIRAConfig: (v) => set(s => ({ iraConfig: { ...s.iraConfig, ...v }, dirty: true })),
   setReferenceProduct: (v) => set(s => ({ referenceProduct: { ...s.referenceProduct, ...v }, dirty: true })),
   setAdoptionConfig: (v) => set(s => ({ adoptionConfig: { ...s.adoptionConfig, ...v }, dirty: true })),
+  setFormularyTierOverride: (v) => set({ formularyTierOverride: v, dirty: true }),
   reinitialize: () => {
     const s = get();
     const defaults = generateDefaults(s.startYear, s.nYears, s.benefitType);
