@@ -91,7 +91,7 @@ export function DashboardTab() {
   // ── Chart data ──
 
   // Waterfall
-  // Waterfall: invisible base + visible colored segment (bridge chart)
+  // Waterfall data: each item has [bottom, top] range for the bar
   const waterfallData = useMemo(() => {
     const totReb = annualData.reduce((s, d) => s + d.totalRebates, 0);
     const totCB = annualData.reduce((s, d) => s + d.totalChargebacks, 0);
@@ -101,12 +101,13 @@ export function DashboardTab() {
     const c = totCB / 1e6;
     const o = totOth / 1e6;
     const n = totalNet / 1e6;
+    // Each bar defined as [bottom, top] range
     return [
-      { label: 'Gross Sales', base: 0, segment: g, fill: '#5B9BD5', displayLabel: `$${g.toFixed(1)}M`, topVal: g },
-      { label: `(-) Rebates`, base: g - r, segment: r, fill: '#f87171', displayLabel: `-$${r.toFixed(1)}M`, topVal: g },
-      { label: `(-) Chargebacks`, base: g - r - c, segment: c, fill: '#C6B78A', displayLabel: `-$${c.toFixed(1)}M`, topVal: g - r },
-      { label: `(-) Fees/Other`, base: g - r - c - o, segment: o, fill: '#C98B27', displayLabel: `-$${o.toFixed(1)}M`, topVal: g - r - c },
-      { label: 'Net Sales', base: 0, segment: n, fill: '#4ade80', displayLabel: `$${n.toFixed(1)}M`, topVal: n },
+      { label: 'Gross Sales', range: [0, g] as [number, number], fill: '#5B9BD5', displayLabel: `$${g.toFixed(1)}M` },
+      { label: '(-) Rebates', range: [g - r, g] as [number, number], fill: '#f87171', displayLabel: `-$${r.toFixed(1)}M` },
+      { label: '(-) Chargebacks', range: [g - r - c, g - r] as [number, number], fill: '#C6B78A', displayLabel: `-$${c.toFixed(1)}M` },
+      { label: '(-) Fees/Other', range: [g - r - c - o, g - r - c] as [number, number], fill: '#C98B27', displayLabel: `-$${o.toFixed(1)}M` },
+      { label: 'Net Sales', range: [0, n] as [number, number], fill: '#4ade80', displayLabel: `$${n.toFixed(1)}M` },
     ];
   }, [annualData, totalGross, totalNet]);
 
@@ -254,19 +255,22 @@ export function DashboardTab() {
             <BarChart data={waterfallData} barCategoryGap="20%">
               <CartesianGrid strokeDasharray="3 3" stroke="#EAECEC" />
               <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-              <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}M`} tick={{ fontSize: 11 }} />
+              <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}M`} tick={{ fontSize: 11 }} domain={[0, 'auto']} />
               <Tooltip
-                formatter={(v: number, name: string) => {
-                  if (name === 'base') return [null, null];
-                  return [`$${Number(v).toFixed(1)}M`, name === 'segment' ? 'Amount' : name];
+                formatter={(v: unknown, name: string) => {
+                  if (name === 'range') {
+                    const arr = v as [number, number];
+                    const diff = Math.abs(arr[1] - arr[0]);
+                    return [`$${diff.toFixed(1)}M`, 'Amount'];
+                  }
+                  return [String(v), name];
                 }}
                 contentStyle={{ fontSize: 12 }}
-                itemStyle={{ color: '#004567' }}
               />
-              <Bar dataKey="base" stackId="wf" fillOpacity={0} stroke="none" />
-              <Bar dataKey="segment" stackId="wf"
-                label={{ position: 'insideTop', fontSize: 10, fill: '#fff', fontWeight: 700,
-                  formatter: (_: number, item: unknown) => {
+              <Bar dataKey="range"
+                label={{
+                  position: 'top', fontSize: 11, fontWeight: 700, fill: '#004567',
+                  formatter: (_: unknown, item: unknown) => {
                     const entry = item as { payload?: { displayLabel?: string } };
                     return entry?.payload?.displayLabel ?? '';
                   }
