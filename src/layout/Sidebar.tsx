@@ -32,7 +32,7 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
         <button onClick={onToggle} className="text-white hover:text-[#C98B27] mb-4" title="Expand sidebar">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
-        <img src={chryselysLogo} alt="Chryselys" className="h-7 w-auto" />
+        <img src={chryselysLogo} alt="Chryselys" className="h-9 w-auto" />
         {dirty && <span className="w-2 h-2 rounded-full bg-amber-400 mt-auto mb-2" title="Unsaved changes" />}
       </aside>
     );
@@ -42,7 +42,7 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
     <aside className="w-64 min-h-screen bg-[#004567] border-r border-[#004466] p-4 flex flex-col gap-4 shrink-0">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <img src={chryselysLogo} alt="Chryselys" className="h-8 w-auto" />
+          <img src={chryselysLogo} alt="Chryselys" className="h-10 w-auto" />
           <div>
             <div className="text-base font-bold text-white leading-tight">AccessLens</div>
             <div className="text-[8px] text-[#C6B78A] tracking-wider">by Chryselys</div>

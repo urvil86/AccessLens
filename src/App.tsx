@@ -20,7 +20,7 @@ function App() {
       <main className="flex-1 min-h-screen overflow-y-auto">
         <div className="max-w-[1400px] mx-auto px-6 py-4">
           <div className="bg-[#004567] text-white px-5 py-3 rounded-lg mb-4 font-semibold shadow-md flex items-center gap-4 border-b-4 border-[#C98B27]">
-            <img src={chryselysLogo} alt="Chryselys" className="h-10 w-auto" />
+            <img src={chryselysLogo} alt="Chryselys" className="h-12 w-auto" />
             <div>
               <div className="text-lg leading-tight">AccessLens</div>
               <div className="text-[10px] text-[#C6B78A] font-normal tracking-wider">Dynamic Multi-Year Gross-to-Net Analyzer</div>
