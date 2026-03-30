@@ -227,7 +227,19 @@ function VolumeForecastSection() {
           </div>
         )}
         <label className="flex items-center gap-1.5 text-xs text-[#44546A] cursor-pointer ml-auto">
-          <input type="checkbox" checked={autoAMP} onChange={e => setAutoAMP(e.target.checked)} className="accent-[#004567]" />
+          <input type="checkbox" checked={autoAMP} onChange={e => {
+            const newVal = e.target.checked;
+            setAutoAMP(newVal);
+            // FLOW: autoCalc ON → reset all AMP overrides → derived values show immediately
+            if (newVal) {
+              for (let i = 0; i < forecast.length; i++) {
+                const derivedAmp = Math.round(forecast[i].wacPerUnit * 0.85 * 100) / 100;
+                if (Math.abs(forecast[i].ampPerUnit - derivedAmp) > 0.01) {
+                  updateForecastRow(i, { ampPerUnit: derivedAmp });
+                }
+              }
+            }
+          }} className="accent-[#004567]" />
           Auto-calculate AMP (85% of WAC)
         </label>
       </div>

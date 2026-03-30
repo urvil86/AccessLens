@@ -7,6 +7,7 @@ import { AssumptionsPage } from './pages/Assumptions';
 import { ResultsPage } from './pages/Results';
 import { ScenariosPage } from './pages/Scenarios';
 import { PortfolioDashboard } from './components/portfolio/PortfolioDashboard';
+import { CustomerForecastPage } from './components/customers/CustomerForecastPage';
 import { useKeyboardShortcuts } from './engine/useKeyboardShortcuts';
 import chryselysLogo from './assets/chryselys-logo.png';
 
@@ -16,6 +17,12 @@ function App() {
   const viewMode = useStore(s => s.viewMode);
   const setViewMode = useStore(s => s.setViewMode);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const viewModes = [
+    { key: 'brand' as const, label: 'Brand View' },
+    { key: 'portfolio' as const, label: 'Portfolio View' },
+    { key: 'customers' as const, label: 'Customers' },
+  ];
 
   return (
     <>
@@ -30,18 +37,16 @@ function App() {
             </div>
             {/* View mode toggle */}
             <div className="flex gap-1 bg-white/10 rounded-lg p-0.5">
-              <button onClick={() => setViewMode('brand')}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${viewMode === 'brand' ? 'bg-white text-[#004567]' : 'text-white/70 hover:text-white'}`}>
-                Brand View
-              </button>
-              <button onClick={() => setViewMode('portfolio')}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${viewMode === 'portfolio' ? 'bg-white text-[#004567]' : 'text-white/70 hover:text-white'}`}>
-                Portfolio View
-              </button>
+              {viewModes.map(vm => (
+                <button key={vm.key} onClick={() => setViewMode(vm.key)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${viewMode === vm.key ? 'bg-white text-[#004567]' : 'text-white/70 hover:text-white'}`}>
+                  {vm.label}
+                </button>
+              ))}
             </div>
           </div>
 
-          {viewMode === 'brand' ? (
+          {viewMode === 'brand' && (
             <>
               <TabBar />
               <div className="mt-2">
@@ -51,9 +56,9 @@ function App() {
                 {activeTab === 'scenarios' && <ScenariosPage />}
               </div>
             </>
-          ) : (
-            <PortfolioDashboard />
           )}
+          {viewMode === 'portfolio' && <PortfolioDashboard />}
+          {viewMode === 'customers' && <CustomerForecastPage />}
         </div>
       </main>
     </>

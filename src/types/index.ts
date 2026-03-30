@@ -38,6 +38,18 @@ export interface OtherRates {
   papCost: number;            // Patient assistance program costs
 }
 
+export interface Customer {
+  id: number;
+  name: string;
+  channelType: string;
+  contractedRebatePct: number;
+  medicaidMixPct: number;
+  volumePctOfChannel: number;
+  notes: string;
+  idnDiscount?: number;
+  is340b?: boolean;
+}
+
 export interface IDN {
   name: string;
   discount: number;

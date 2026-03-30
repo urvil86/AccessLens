@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type {
   ForecastRow, ChannelAllocation, DiscountRates, RebateRates, OtherRates,
-  IDN, TabId, Scenario, ScenarioSnapshot, BenefitType, IRAConfig, ReferenceProduct, AdoptionConfig,
+  IDN, TabId, Scenario, ScenarioSnapshot, BenefitType, IRAConfig, ReferenceProduct, AdoptionConfig, Customer,
 } from '../types';
 import {
   DEFAULT_CHANNEL_ALLOC, BNB_CHANNEL_ALLOC, PBX_CHANNEL_ALLOC,
@@ -39,7 +39,7 @@ interface AppState {
   nYears: number;
   startYear: number;
   activeTab: TabId;
-  viewMode: 'brand' | 'portfolio';
+  viewMode: 'brand' | 'portfolio' | 'customers';
 
   // Data
   forecast: ForecastRow[];
@@ -53,6 +53,7 @@ interface AppState {
   referenceProduct: ReferenceProduct;
   adoptionConfig: AdoptionConfig;
   formularyTierOverride: 'auto' | 'preferred' | 'non-preferred' | 'non-formulary';
+  customerList: Customer[];
 
   // Scenario management
   scenarios: Record<string, Scenario>;
@@ -65,7 +66,7 @@ interface AppState {
   setBenefitType: (v: BenefitType) => void;
   setRoa: (v: 'IV' | 'SC' | 'Oral') => void;
   resetBenefitTypeToAuto: () => void;
-  setViewMode: (v: 'brand' | 'portfolio') => void;
+  setViewMode: (v: 'brand' | 'portfolio' | 'customers') => void;
   setNYears: (v: number) => void;
   setStartYear: (v: number) => void;
   setActiveTab: (v: TabId) => void;
@@ -90,6 +91,10 @@ interface AppState {
   setReferenceProduct: (v: Partial<ReferenceProduct>) => void;
   setAdoptionConfig: (v: Partial<AdoptionConfig>) => void;
   setFormularyTierOverride: (v: 'auto' | 'preferred' | 'non-preferred' | 'non-formulary') => void;
+  setCustomerList: (v: Customer[]) => void;
+  updateCustomer: (id: number, patch: Partial<Customer>) => void;
+  addCustomer: () => void;
+  deleteCustomer: (id: number) => void;
   reinitialize: () => void;
 
   // Scenario actions
@@ -250,6 +255,16 @@ export const useStore = create<AppState>((set, get) => ({
     timeToSteadyStateYears: 3, switchRatePctPerMonth: 3, newPatientCapturePct: 60, interchangeableUplift: 2.5,
   },
   formularyTierOverride: 'auto' as const,
+  customerList: [
+    { id: 1, name: 'CVS Caremark', channelType: 'Commercial PBM', contractedRebatePct: 34.5, medicaidMixPct: 0, volumePctOfChannel: 55, notes: 'Primary PBM — formulary preferred tier 2' },
+    { id: 2, name: 'Express Scripts (Evernorth)', channelType: 'Commercial PBM', contractedRebatePct: 31.0, medicaidMixPct: 0, volumePctOfChannel: 45, notes: 'Formulary preferred tier 2' },
+    { id: 3, name: 'UnitedHealth / Optum Rx', channelType: 'Medicare Part D', contractedRebatePct: 29.5, medicaidMixPct: 0, volumePctOfChannel: 40, notes: 'PDL preferred — Part D' },
+    { id: 4, name: 'Humana Part D', channelType: 'Medicare Part D', contractedRebatePct: 27.0, medicaidMixPct: 0, volumePctOfChannel: 30, notes: 'Non-preferred — rebate pending negotiation' },
+    { id: 5, name: 'Centene / WellCare', channelType: 'Managed Medicaid', contractedRebatePct: 43.5, medicaidMixPct: 85, volumePctOfChannel: 35, notes: 'Large managed Medicaid — supplemental rebate agreement' },
+    { id: 6, name: 'Molina Healthcare', channelType: 'Managed Medicaid', contractedRebatePct: 41.0, medicaidMixPct: 80, volumePctOfChannel: 25, notes: 'Managed Medicaid — state formulary restrictions' },
+    { id: 7, name: 'HCA Healthcare (IDN)', channelType: 'GPO/IDN Non-340B', contractedRebatePct: 0, medicaidMixPct: 12, volumePctOfChannel: 30, notes: 'GPO member — 20% off WAC contract', idnDiscount: 20.0, is340b: false },
+    { id: 8, name: 'CommonSpirit Health (340B)', channelType: 'GPO/IDN 340B', contractedRebatePct: 0, medicaidMixPct: 18, volumePctOfChannel: 60, notes: '340B covered entity — ceiling price applies', idnDiscount: 25.6, is340b: true },
+  ] as Customer[],
 
   // Scenario state
   scenarios: loadScenarios(),
@@ -377,6 +392,18 @@ export const useStore = create<AppState>((set, get) => ({
   setReferenceProduct: (v) => set(s => ({ referenceProduct: { ...s.referenceProduct, ...v }, dirty: true })),
   setAdoptionConfig: (v) => set(s => ({ adoptionConfig: { ...s.adoptionConfig, ...v }, dirty: true })),
   setFormularyTierOverride: (v) => set({ formularyTierOverride: v, dirty: true }),
+  setCustomerList: (v) => set({ customerList: v, dirty: true }),
+  updateCustomer: (id, patch) => set(s => ({
+    customerList: s.customerList.map(c => c.id === id ? { ...c, ...patch } : c), dirty: true,
+  })),
+  addCustomer: () => set(s => ({
+    customerList: [...s.customerList, {
+      id: Math.max(0, ...s.customerList.map(c => c.id)) + 1,
+      name: 'New Customer', channelType: 'Commercial PBM', contractedRebatePct: 30,
+      medicaidMixPct: 0, volumePctOfChannel: 10, notes: '',
+    }], dirty: true,
+  })),
+  deleteCustomer: (id) => set(s => ({ customerList: s.customerList.filter(c => c.id !== id), dirty: true })),
   reinitialize: () => {
     const s = get();
     const defaults = generateDefaults(s.startYear, s.nYears, s.benefitType);
