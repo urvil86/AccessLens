@@ -1,12 +1,16 @@
+import { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { THERAPY_AREAS, BENEFIT_TYPES } from '../engine/constants';
+import type { BenefitType } from '../types';
 import chryselysLogo from '../assets/chryselys-logo.png';
 
 export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
+  const [showBenefitOverride, setShowBenefitOverride] = useState(false);
   const {
     productName, setProductName,
     therapyArea, setTherapyArea,
     benefitType, setBenefitType,
+    roa, setRoa, benefitTypeOverridden, resetBenefitTypeToAuto,
     nYears, setNYears,
     startYear, setStartYear,
     forecast,
@@ -72,21 +76,37 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
         {THERAPY_AREAS.map(t => <option key={t}>{t}</option>)}
       </select>
 
-      <label className="text-xs font-semibold text-[#C6B78A] uppercase tracking-wider">Benefit Type</label>
-      <select
-        value={benefitType}
-        onChange={e => {
-          if (confirm('Changing benefit type will reset channel allocations and rebate defaults. Continue?')) {
-            setBenefitType(e.target.value as 'buy-and-bill' | 'pharmacy-benefit');
-          }
-        }}
-        className="px-2 py-1.5 border border-[#5C6082] rounded text-sm bg-[#004466] text-white focus:border-[#C98B27] outline-none"
-      >
-        {BENEFIT_TYPES.map(bt => <option key={bt.id} value={bt.id}>{bt.label}</option>)}
+      <label className="text-xs font-semibold text-[#C6B78A] uppercase tracking-wider">Route of Administration</label>
+      <select value={roa} onChange={e => setRoa(e.target.value as 'IV' | 'SC' | 'Oral')}
+        className="px-2 py-1.5 border border-[#5C6082] rounded text-sm bg-[#004466] text-white focus:border-[#C98B27] outline-none">
+        <option value="IV">IV – Intravenous</option>
+        <option value="SC">SC – Subcutaneous</option>
+        <option value="Oral">Oral</option>
       </select>
-      <p className="text-[9px] text-[#9296B2] leading-tight">
-        {BENEFIT_TYPES.find(bt => bt.id === benefitType)?.description}
-      </p>
+
+      <label className="text-xs font-semibold text-[#C6B78A] uppercase tracking-wider">Benefit Type</label>
+      <div className="flex items-center gap-2">
+        {showBenefitOverride ? (
+          <select value={benefitType}
+            onChange={e => { setBenefitType(e.target.value as BenefitType); setShowBenefitOverride(false); }}
+            className="flex-1 px-2 py-1 border border-[#5C6082] rounded text-[10px] bg-[#004466] text-white focus:border-[#C98B27] outline-none">
+            {BENEFIT_TYPES.map(bt => <option key={bt.id} value={bt.id}>{bt.label}</option>)}
+          </select>
+        ) : (
+          <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${benefitType === 'buy-and-bill' ? 'bg-[#1D6FA4] text-white' : 'bg-[#2B5797] text-white'}`}>
+            {benefitType === 'buy-and-bill' ? 'Medical Benefit' : 'Pharmacy Benefit'}
+          </span>
+        )}
+        {!showBenefitOverride && !benefitTypeOverridden && (
+          <button onClick={() => setShowBenefitOverride(true)} className="text-[9px] text-[#9296B2] hover:text-white">Override</button>
+        )}
+        {benefitTypeOverridden && !showBenefitOverride && (
+          <button onClick={() => { resetBenefitTypeToAuto(); }} className="text-[9px] text-[#C98B27] hover:text-white">↺ Reset to auto</button>
+        )}
+      </div>
+      {benefitTypeOverridden && (
+        <p className="text-[9px] text-amber-400">⚠ Manual override active</p>
+      )}
 
       <hr className="border-[#5C6082]" />
       <div className="text-sm font-bold text-[#C98B27]">Forecast Horizon</div>

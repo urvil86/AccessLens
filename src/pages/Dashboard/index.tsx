@@ -6,6 +6,7 @@ import { MetricCard } from '../../shared/MetricCard';
 import { Accordion } from '../../shared/Accordion';
 import { DataTable } from '../../shared/DataTable';
 import { COLORS_MAIN } from '../../engine/constants';
+import { ChannelMixTrendChart } from '../../components/charts/ChannelMixTrendChart';
 import {
   ComposedChart, BarChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
@@ -27,7 +28,8 @@ export function DashboardTab() {
   const rp = useStore(s => s.referenceProduct);
 
   const [chartView, setChartView] = useState<'waterfall' | 'trend' | 'channel'>('waterfall');
-  const [pieYear, setPieYear] = useState(0); // index into forecastYears
+  const [pieYear, setPieYear] = useState(0);
+  const [channelSubView, setChannelSubView] = useState<'single' | 'trend'>('single'); // index into forecastYears
 
   // ── KPI computations ──
   const totalGross = annualData.reduce((s, d) => s + d.grossSales, 0);
@@ -303,40 +305,42 @@ export function DashboardTab() {
         {/* View C: Channel Mix */}
         {chartView === 'channel' && (
           <div>
-            <ResponsiveContainer width="100%" height={350}>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%" cy="50%"
-                  innerRadius={80} outerRadius={140}
-                  dataKey="value"
-                  label={({ name, value }: { name: string; value: number }) => value >= 5 ? `${name}: ${value.toFixed(1)}%` : ''}
-                  labelLine={false}
-                >
-                  {pieData.map((_, i) => (
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: number) => [`${Number(v).toFixed(1)}%`]} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central"
-                  className="fill-[#004567] text-2xl font-bold font-mono">
-                  {forecastYears[pieYear] ?? ''}
-                </text>
-              </PieChart>
-            </ResponsiveContainer>
-            {/* Year slider */}
-            <div className="flex items-center gap-3 px-4 mt-2">
-              <span className="text-xs text-[#9296B2] font-mono">{firstYear}</span>
-              <input
-                type="range"
-                min={0} max={forecastYears.length - 1}
-                value={pieYear}
-                onChange={e => setPieYear(Number(e.target.value))}
-                className="flex-1"
-              />
-              <span className="text-xs text-[#9296B2] font-mono">{lastYear}</span>
+            {/* Sub-toggle: Single Year vs Trend */}
+            <div className="flex gap-1 bg-[#EAECEC] rounded-lg p-0.5 w-fit mb-3">
+              <button onClick={() => setChannelSubView('single')}
+                className={`px-3 py-1 rounded-md text-[10px] font-semibold ${channelSubView === 'single' ? 'bg-[#C98B27] text-white shadow' : 'text-[#44546A]'}`}>
+                Single Year
+              </button>
+              <button onClick={() => setChannelSubView('trend')}
+                className={`px-3 py-1 rounded-md text-[10px] font-semibold ${channelSubView === 'trend' ? 'bg-[#C98B27] text-white shadow' : 'text-[#44546A]'}`}>
+                Trend View
+              </button>
             </div>
+
+            {channelSubView === 'single' ? (
+              <>
+                <ResponsiveContainer width="100%" height={350}>
+                  <PieChart>
+                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={80} outerRadius={140} dataKey="value"
+                      label={({ name, value }: { name: string; value: number }) => value >= 5 ? `${name}: ${value.toFixed(1)}%` : ''} labelLine={false}>
+                      {pieData.map((_, i) => (<Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />))}
+                    </Pie>
+                    <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: number) => [`${Number(v).toFixed(1)}%`]} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" className="fill-[#004567] text-2xl font-bold font-mono">
+                      {forecastYears[pieYear] ?? ''}
+                    </text>
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="flex items-center gap-3 px-4 mt-2">
+                  <span className="text-xs text-[#9296B2] font-mono">{firstYear}</span>
+                  <input type="range" min={0} max={forecastYears.length - 1} value={pieYear} onChange={e => setPieYear(Number(e.target.value))} className="flex-1" />
+                  <span className="text-xs text-[#9296B2] font-mono">{lastYear}</span>
+                </div>
+              </>
+            ) : (
+              <ChannelMixTrendChart />
+            )}
           </div>
         )}
       </div>

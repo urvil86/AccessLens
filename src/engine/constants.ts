@@ -46,6 +46,34 @@ export const CHANNEL_DESCRIPTIONS: Record<string, string> = {
   'Cash/Uninsured': 'Out-of-pocket / patient assistance programs',
 };
 
+// Fixed channel color map — consistent across all charts
+export const CHANNEL_COLOR_MAP: Record<string, string> = {
+  'Commercial PBM':     '#2B5797',
+  'Commercial Medical': '#4A90D9',
+  'Medicare Part B':    '#1D6FA4',
+  'Medicare Part D':    '#5BA3D0',
+  'Medicaid FFS':       '#F5A623',
+  'Managed Medicaid':   '#F7C05A',
+  'GPO/IDN Non-340B':   '#7ED321',
+  'GPO/IDN 340B':       '#B8E97A',
+  'VA/DoD/Federal':     '#D0021B',
+  'Cash/Uninsured':     '#9B9B9B',
+};
+
+// Benefit type channel highlights
+export const MEDICAL_BENEFIT_CHANNELS = ['Commercial Medical', 'Medicare Part B', 'GPO/IDN Non-340B', 'GPO/IDN 340B', 'VA/DoD/Federal'];
+export const PHARMACY_BENEFIT_CHANNELS = ['Commercial PBM', 'Medicare Part D', 'Medicaid FFS', 'Managed Medicaid'];
+
+// Portfolio palette
+export const PORTFOLIO_COLORS = ['#2B5797', '#F5A623', '#7ED321', '#D0021B', '#9B9B9B'];
+
+// RoA to Benefit Type mapping
+export const ROA_BENEFIT_MAP: Record<string, string> = {
+  'IV': 'Medical Benefit (Buy & Bill / Medicare Part B)',
+  'SC': 'Pharmacy Benefit',
+  'Oral': 'Pharmacy Benefit',
+};
+
 // Chryselys 2026 Brand Palette
 export const BRAND = {
   navy: '#004567',

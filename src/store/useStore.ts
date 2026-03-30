@@ -34,9 +34,12 @@ interface AppState {
   productName: string;
   therapyArea: string;
   benefitType: BenefitType;
+  roa: 'IV' | 'SC' | 'Oral';
+  benefitTypeOverridden: boolean;
   nYears: number;
   startYear: number;
   activeTab: TabId;
+  viewMode: 'brand' | 'portfolio';
 
   // Data
   forecast: ForecastRow[];
@@ -60,6 +63,9 @@ interface AppState {
   setProductName: (v: string) => void;
   setTherapyArea: (v: string) => void;
   setBenefitType: (v: BenefitType) => void;
+  setRoa: (v: 'IV' | 'SC' | 'Oral') => void;
+  resetBenefitTypeToAuto: () => void;
+  setViewMode: (v: 'brand' | 'portfolio') => void;
   setNYears: (v: number) => void;
   setStartYear: (v: number) => void;
   setActiveTab: (v: TabId) => void;
@@ -221,8 +227,11 @@ export const useStore = create<AppState>((set, get) => ({
   productName: 'RXPRODUCT-001',
   therapyArea: 'Oncology',
   benefitType: 'buy-and-bill' as BenefitType,
+  roa: 'IV' as const,
+  benefitTypeOverridden: false,
   nYears: 7,
   startYear: 2025,
+  viewMode: 'brand' as const,
   activeTab: 'dashboard',
 
   ...initialDefaults,
@@ -265,8 +274,40 @@ export const useStore = create<AppState>((set, get) => ({
       mcaid: rebDef.mcaid,
       manMcaid: Math.round((rebDef.manMcaid + i * 0.3) * 10) / 10,
     }));
-    set({ benefitType: v, channelAllocations, rebates, dirty: true });
+    set({ benefitType: v, benefitTypeOverridden: true, channelAllocations, rebates, dirty: true });
   },
+  setRoa: (v) => {
+    const s = get();
+    const roaMap: Record<string, BenefitType> = { 'IV': 'buy-and-bill', 'SC': 'pharmacy-benefit', 'Oral': 'pharmacy-benefit' };
+    if (!s.benefitTypeOverridden) {
+      const newBT = roaMap[v] ?? 'buy-and-bill';
+      // Only reset allocations if benefit type actually changes
+      if (newBT !== s.benefitType) {
+        const chAlloc = newBT === 'buy-and-bill' ? BNB_CHANNEL_ALLOC : PBX_CHANNEL_ALLOC;
+        const rebDef = newBT === 'buy-and-bill' ? BNB_REBATE_DEFAULTS : PBX_REBATE_DEFAULTS;
+        const years = Array.from({ length: s.nYears }, (_, i) => s.startYear + i);
+        const channelAllocations = years.map(year => ({ year, allocations: { ...chAlloc } }));
+        const rebates = years.map((year, i) => ({
+          year, comPbm: Math.round((rebDef.comPbm + i * 0.5) * 10) / 10,
+          comMed: Math.round((rebDef.comMed + i * 0.3) * 10) / 10,
+          mcrD: Math.round((rebDef.mcrD + i * 0.4) * 10) / 10,
+          mcaid: rebDef.mcaid, manMcaid: Math.round((rebDef.manMcaid + i * 0.3) * 10) / 10,
+        }));
+        set({ roa: v, benefitType: newBT, channelAllocations, rebates, dirty: true });
+      } else {
+        set({ roa: v, dirty: true });
+      }
+    } else {
+      set({ roa: v, dirty: true });
+    }
+  },
+  resetBenefitTypeToAuto: () => {
+    const s = get();
+    const roaMap: Record<string, BenefitType> = { 'IV': 'buy-and-bill', 'SC': 'pharmacy-benefit', 'Oral': 'pharmacy-benefit' };
+    const newBT = roaMap[s.roa] ?? 'buy-and-bill';
+    set({ benefitTypeOverridden: false, benefitType: newBT, dirty: true });
+  },
+  setViewMode: (v) => set({ viewMode: v }),
   setNYears: (v) => {
     const s = get();
     const defaults = generateDefaults(s.startYear, v, s.benefitType);
